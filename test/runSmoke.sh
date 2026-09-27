@@ -11,6 +11,6 @@ mkdir -p $WORK
 {
     time runGeomosaicTiles --config $CONFIG "$@"
     grep -h 'read+average' $WORK/jobs/*/log
-    time makeGoogleEarth $WORK --out $WORK/googleEarth --processes ${NPROC:-4} --zoom ${ZOOM:-0-9}
+    time makeGoogleEarth $WORK --out $WORK/googleEarth --processes ${NPROC:-24} --zoom ${ZOOM:-0-9}
     echo "=== all done $(date): open $WORK/googleEarth/doc.kml"
 } 2>&1 | tee $WORK/run.log

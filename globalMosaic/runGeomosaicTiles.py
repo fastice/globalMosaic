@@ -30,7 +30,11 @@ Grid
   covers the tile plus a --featherKm margin (whole pixels) and is then cropped to the tile.
 
 Granule paths (--granules)
-  vsicurl        /vsicurl/<ASF url> from the tile CSV (needs GDAL_HTTP_NETRC / credentials)
+  vsicurl        /vsicurl/<ASF url> from the tile CSV (Earthdata login in ~/.netrc); works anywhere
+  s3             /vsis3/<ASF bucket>/<same path>: direct S3 reads, for runs in AWS us-west-2 only.
+                 Temporary keys come from ASF's s3credentials endpoint (Earthdata login in
+                 ~/.netrc); they last 1 h, so each job starts with keys that have >= 50 min left,
+                 and a job that dies on an expired key is retried with fresh ones.
   DIR            <DIR>/<name>.h5 (local copies)
   TEMPLATE       any string with {name} or {url}, e.g. '/vsis3/my-bucket/gcov/{name}.h5'
   --factorFrom   passed through to the yaml for slim granules (shared RTC factor directory)
@@ -49,14 +53,17 @@ Polar caps
 '''
 import argparse
 import concurrent.futures
+import datetime
 import glob
 import json
 import math
 import os
 import subprocess
 import sys
+import threading
 import time
 
+import requests
 import yaml
 from osgeo import gdal
 
@@ -72,9 +79,18 @@ def log(msg, fp=None):
         fp.flush()
 
 
+ASF_HTTPS = 'https://nisar.asf.earthdatacloud.nasa.gov/NISAR/'
+ASF_BUCKET = 'sds-n-cumulus-prod-nisar-products'
+ASF_S3CREDS = 'https://nisar.asf.earthdatacloud.nasa.gov/s3credentials'
+
+
 def granulePath(spec, name, url):
     if spec == 'vsicurl':
         return f'/vsicurl/{url}'
+    if spec == 's3':
+        if not url.startswith(ASF_HTTPS):
+            raise ValueError(f'not an ASF NISAR url: {url}')
+        return f'/vsis3/{ASF_BUCKET}/{url[len(ASF_HTTPS):]}'
     if '{' in spec:
         return spec.format(name=name, url=url)
     return os.path.join(spec, f'{name}.h5')
@@ -133,10 +149,30 @@ def writeJob(jobDir, grid, yamlIn, csvRows, spec, factorFrom):
 
 
 REMOTE_ERRORS = ('could not open remote input', 'CURL error', 'Could not resolve host',
-                 'HTTP response code')
+                 'HTTP response code', 'ExpiredToken', 'AccessDenied', 'InvalidAccessKeyId')
 
 
-def runJob(jobDir, cmdBase, products, retries=2):
+class S3Keys:
+    ''' ASF temporary S3 keys (1 h), shared by all jobs and refreshed when < minLeft remain. '''
+
+    def __init__(self, minLeft=3000.):
+        self.lock, self.keys, self.expires, self.minLeft = threading.Lock(), None, 0., minLeft
+
+    def env(self):
+        with self.lock:
+            if self.keys is None or self.expires - time.time() < self.minLeft:
+                r = requests.get(ASF_S3CREDS, timeout=60)     # Earthdata login from ~/.netrc
+                r.raise_for_status()
+                k = r.json()
+                self.keys = dict(AWS_ACCESS_KEY_ID=k['accessKeyId'],
+                                 AWS_SECRET_ACCESS_KEY=k['secretAccessKey'],
+                                 AWS_SESSION_TOKEN=k['sessionToken'], AWS_REGION='us-west-2')
+                exp = datetime.datetime.strptime(k['expiration'], '%Y-%m-%d %H:%M:%S%z')
+                self.expires = exp.timestamp()
+            return dict(self.keys)
+
+
+def runJob(jobDir, cmdBase, products, retries=2, s3Keys=None):
     ''' Run one geomosaic job; retry when it died on a remote (network) error -- geomosaic makes a
     failed /vsi open fatal, and over hundreds of remote jobs a DNS/network blip is certain. '''
     if all(os.path.exists(f'{jobDir}/out.{p}.tif') for p in products):
@@ -150,6 +186,8 @@ def runJob(jobDir, cmdBase, products, retries=2):
                GDAL_HTTP_MAX_RETRY='5', GDAL_HTTP_RETRY_DELAY='10')
     t0 = time.time()
     for attempt in range(retries + 1):
+        if s3Keys is not None:
+            env.update(s3Keys.env())
         with open(f'{jobDir}/log', 'w') as fp:
             rc = subprocess.run(cmdBase + ['-gcov', 'gcov.yaml', 'inputFile', 'none', 'out'],
                                 cwd=jobDir, env=env, stdout=fp, stderr=subprocess.STDOUT).returncode
@@ -207,7 +245,7 @@ def main():
     ap.add_argument('tileRun', nargs='?', default=None, help='output directory of globalGCOVTiles.py')
     ap.add_argument('--config', default=None, help='run yaml (keys = option names); command line overrides')
     ap.add_argument('--work', default=None, help='work/output directory')
-    ap.add_argument('--granules', default=None, help='vsicurl | DIR | TEMPLATE with {name}/{url}')
+    ap.add_argument('--granules', default=None, help='vsicurl | s3 | DIR | TEMPLATE with {name}/{url}')
     ap.add_argument('--factorFrom', default=None, help='shared RTC factor directory (slim granules)')
     ap.add_argument('--res', type=float, default=3. / 3600, help='latitude spacing, deg [3 arcsec]')
     ap.add_argument('--psResM', type=float, default=100., help='polar cap tile spacing, m [100]')
@@ -269,13 +307,22 @@ def main():
         return 0
 
     failed = []
+    s3Keys = S3Keys() if args.granules == 's3' else None
     with concurrent.futures.ThreadPoolExecutor(args.nProc) as pool:
-        for jobDir, rc, sec, note in pool.map(lambda j: runJob(j[2], jobCmd(j[2]), products, args.retries), jobs):
+        for jobDir, rc, sec, note in pool.map(lambda j: runJob(j[2], jobCmd(j[2]), products, args.retries, s3Keys), jobs):
             ok = rc == 0 and not note.startswith('missing')
             status = 'OK' if ok else f'FAILED rc={rc}'
             log(f'{os.path.basename(jobDir)}: {sec / 60:.1f} min {status} {note}', summary)
             if status != 'OK':
                 failed.append(jobDir)
+                # the reason: last error-looking lines of the job's geomosaic log
+                errs = [l.strip() for l in open(f'{jobDir}/log', errors='ignore')
+                        if any(k in l.lower() for k in ('error', 'fail', 'denied', 'http'))]
+                for l in errs[-3:]:
+                    log(f'    {l[:300]}', summary)
+    if len(failed) == len(jobs):
+        log(f'all {len(jobs)} jobs failed; no VRTs built (see {args.work}/jobs/*/log)', summary)
+        return 1
 
     # crop, then the VRT hierarchy: tile (B under A) -> latitude band -> global
     for product in products:
