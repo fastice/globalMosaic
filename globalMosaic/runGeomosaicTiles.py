@@ -402,7 +402,9 @@ def main():
             jobDir, rc, sec, note = fut.result()
             ok = rc == 0 and not note.startswith('missing')
             status = 'OK' if ok else f'FAILED rc={rc}'
-            log(f'{os.path.basename(jobDir)}: {sec / 60:.1f} min {status} {note}', summary)
+            progress.count(ok, name)
+            log(f'[{progress.done}/{progress.total}, {progress.failed} failed] '
+                f'{os.path.basename(jobDir)}: {sec / 60:.1f} min {status} {note}', summary)
             if status != 'OK':
                 failed.append(jobDir)
                 # the reason: last error-looking lines of the job's geomosaic log
@@ -417,7 +419,6 @@ def main():
                     if not os.path.exists(dst):
                         cropToTile(f'{jobDir}/out.{product}.tif', dst, grids[jobDir])
                 progress.addJob(name, grp, f'{args.work}/tiles/{products[-1]}/{name}.{grp}.tif')
-            progress.count(ok, name)
             if time.time() - lastDraw > args.progressMinutes * 60:
                 progress.draw()
                 lastDraw = time.time()
