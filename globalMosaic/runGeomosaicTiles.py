@@ -31,10 +31,12 @@ Grid
 
 Granule paths (--granules)
   vsicurl        /vsicurl/<ASF url> from the tile CSV (Earthdata login in ~/.netrc); works anywhere
+                 In AWS us-west-2 the redirect lands on an S3 presigned URL, so reads are direct
+                 from S3; GDAL re-requests the redirect when it expires, so long jobs are fine.
   s3             /vsis3/<ASF bucket>/<same path>: direct S3 reads, for runs in AWS us-west-2 only.
                  Temporary keys come from ASF's s3credentials endpoint (Earthdata login in
-                 ~/.netrc); they last 1 h, so each job starts with keys that have >= 50 min left,
-                 and a job that dies on an expired key is retried with fresh ones.
+                 ~/.netrc); they last 1 h and cannot be swapped into a running geomosaic, so a
+                 job longer than ~50 min dies on expired keys -- use vsicurl for big tiles.
   DIR            <DIR>/<name>.h5 (local copies)
   TEMPLATE       any string with {name} or {url}, e.g. '/vsis3/my-bucket/gcov/{name}.h5'
   --factorFrom   passed through to the yaml for slim granules (shared RTC factor directory)
@@ -154,7 +156,8 @@ def writeJob(jobDir, grid, yamlIn, csvRows, spec, factorFrom):
 
 
 REMOTE_ERRORS = ('could not open remote input', 'CURL error', 'Could not resolve host',
-                 'HTTP response code', 'ExpiredToken', 'AccessDenied', 'InvalidAccessKeyId')
+                 'HTTP response code', 'HTTP error code', 'ExpiredToken', 'AccessDenied',
+                 'InvalidAccessKeyId', 'H5Dread() failed')
 
 
 class S3Keys:

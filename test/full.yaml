@@ -2,7 +2,7 @@
 # Resumable: a rerun skips finished jobs. Command-line options override these values.
 tileRun: cycle30/both          # cycle30/ascending or cycle30/descending for one direction
 work: /scratch/ianj/mosaics/cycle30both # run directory (absolute, or relative to the repo): tiles, VRTs, googleEarth/, run.log
-granules: s3                   # s3 = direct S3 reads (AWS us-west-2 only) | vsicurl (anywhere) | local DIR
+granules: vsicurl              # vsicurl (ASF https, re-signs itself: long jobs OK) | s3 (direct, keys last 1 h: jobs > ~50 min fail) | local DIR
 nProc: 24                      # single-threaded jobs, mostly waiting on downloads
 res: 0.000833333333333         # latitude spacing, deg (3 arcsec)
 psResM: 100                    # south polar cap (S84PS3031) spacing, m

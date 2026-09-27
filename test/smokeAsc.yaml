@@ -2,7 +2,7 @@
 # N42W012 = frequency A HH (Iberia, 6 granules); N24E006 = frequency A HH + B VV (Sahara).
 tileRun: cycle30/ascending     # ascending passes only
 work: /scratch/ianj/mosaics/smokeAsc        # run directory (absolute, or relative to the repo): tiles, VRTs, googleEarth/, run.log
-granules: s3                   # s3 = direct S3 reads (AWS us-west-2 only) | vsicurl (anywhere) | local DIR
+granules: vsicurl              # vsicurl (ASF https, re-signs itself: long jobs OK) | s3 (direct, keys last 1 h: jobs > ~50 min fail) | local DIR
 tiles: [N42W012_6x6, N24E006_6x6]
 nProc: 24                      # concurrent single-threaded geomosaic jobs
 res: 0.000833333333333         # latitude spacing, deg (3 arcsec)
