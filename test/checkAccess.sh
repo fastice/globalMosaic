@@ -5,6 +5,10 @@
 cd "$(dirname "$0")/.."
 export PATH=$HOME/bin/$(uname -m):$PATH
 echo "geomosaic: $(command -v geomosaic || echo NOT FOUND)"
+if command -v geomosaic > /dev/null && ldd "$(command -v geomosaic)" | grep -q 'not found'; then
+    echo "geomosaic: MISSING LIBRARIES (GDAL upgraded since the build?) -- rerun installGeomosaic:"
+    ldd "$(command -v geomosaic)" | grep 'not found'
+fi
 python3 - <<'PY'
 import netrc, os
 from osgeo import gdal
