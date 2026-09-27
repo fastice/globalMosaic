@@ -11,6 +11,9 @@ from osgeo import gdal
 from globalMosaic.runGeomosaicTiles import S3Keys, granulePath
 
 print('GDAL', gdal.__version__)
+drv = gdal.GetDriverByName('HDF5')
+print('GDAL HDF5 driver:', 'yes' if drv else
+      'NO -- geomosaic cannot read GCOV; on conda: conda install -c conda-forge libgdal-hdf5')
 try:
     ok = netrc.netrc().authenticators('urs.earthdata.nasa.gov') is not None
     print('~/.netrc Earthdata entry:', 'yes' if ok else 'NO')
@@ -31,6 +34,13 @@ def tryRead(label, path):
     data = gdal.VSIFReadL(1, 8, f)
     gdal.VSIFCloseL(f)
     print(f'{label}: OK (read {len(data)} bytes, HDF5 signature {data[1:4] == b"HDF"})')
+    # what geomosaic does: GDALOpen of the file, then an HDF5 subdataset
+    gdal.ErrorReset()
+    try:
+        ds = gdal.Open(f'HDF5:"{path}"://science/LSAR/GCOV/grids/frequencyA/HHHH')
+        print(f'{label} GDAL HDF5 open: OK ({ds.RasterXSize} x {ds.RasterYSize})')
+    except Exception as e:
+        print(f'{label} GDAL HDF5 open: FAILED -- {str(e)[:300]}')
 
 
 gdal.SetConfigOption('GDAL_DISABLE_READDIR_ON_OPEN', 'EMPTY_DIR')

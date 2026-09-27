@@ -3,6 +3,10 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 pip install -e .
+if ! python3 -c "from osgeo import gdal; import sys; sys.exit(gdal.GetDriverByName('HDF5') is None)"; then
+    echo "GDAL has no HDF5 driver (geomosaic cannot read GCOV); installing the conda-forge plugin"
+    conda install -y -c conda-forge libgdal-hdf5
+fi
 installGeomosaic
 BIN=$HOME/bin/$(uname -m)
 grep -qs "$BIN" ~/.bashrc || echo "export PATH=$BIN:\$PATH" >> ~/.bashrc
