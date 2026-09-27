@@ -14,6 +14,7 @@ component is its own — so five must be checked out side by side under a single
 | `clib` | byte-swapped flat-file I/O |
 | `cRecipes` | SVD, interpolation |
 | `triangle` | Shewchuk triangulation |
+| `landsatSource64` | **headers only** — `landsatMosaic/*.c` all `#include "landsatSource64/Lstrack/lstrack.h"` |
 
 All five are public on `github.com/fastice`, so a fresh instance needs no SSH key.
 
@@ -62,6 +63,28 @@ Two traps live here:
   branch and building a `geomosaic` that lacks the features.
 
 Once that branch is merged, set both entries in the `BRANCH` table to each repo's default.
+
+## Conda-only stacks (Jupyter/Pangeo images)
+
+These images (`/home/jovyan`, `/opt/conda`) carry GDAL, PROJ and HDF5 inside conda and nothing
+in `/usr/include`. The script handles them, but two things had to change:
+
+**The hardcoded GDAL link list fails there.** The Makefile asks for
+`-lgdal -lproj -lcurl -lsqlite3 -llzma -lpoppler -lopenjp2 -lssh2 -llcms2`. Those extras are
+unnecessary — `libgdal.so` already carries them as `NEEDED` — and conda does not ship linkable
+`.so` names for several, so the link dies on `-llzma` / `-lpoppler`. **Do not install poppler
+or lzma to satisfy it**; the fix is to stop asking. The script uses `gdal-config --libs`
+instead (which also supplies the `-L` conda needs) and adds `-lproj` back explicitly, because
+`common/grimpProj.c` calls proj directly rather than only through GDAL's OSR. Verified against
+a system GDAL: the slim list produces a byte-identical binary.
+
+It picks the `gdal-config` from the **same prefix as the headers it found**, so a conda
+`gdal-config` on `PATH` cannot end up describing a system GDAL, or the reverse.
+
+**Pair HDF5 with whatever GDAL you are using.** On a conda stack both come from conda, which
+is consistent. Mixing — conda GDAL with a system libhdf5, or the reverse — puts two different
+HDF5 versions in one process, and symbol interposition there corrupts data rather than failing
+cleanly.
 
 ## Portability: what is detected, and why
 

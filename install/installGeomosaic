@@ -25,6 +25,7 @@
 #       --jobs N         parallel make jobs           [nproc]
 #       --hdf5-include D HDF5 serial headers, if not in /usr/include (no-root route)
 #       --hdf5-lib SPEC  HDF5 library to link, e.g. an absolute .so path
+#       --gdal-libs SPEC GDAL link flags [from gdal-config --libs, plus -lproj]
 #       --no-pull        build what is on disk, do not fetch
 #       --force          discard local modifications when pulling
 #       --check-only     report what would happen, build nothing
@@ -41,9 +42,15 @@ DOPULL=1
 FORCE=0
 HDF5INC=""
 HDF5LIB=""
+GDALLIBS=""
 CHECKONLY=0
 
-REPOS=(clib cRecipes triangle gdalIO mosaicSource)
+# landsatSource64 is here for a HEADER, not for code geomosaic links. geomosaic links only
+# landsatMosaic/xyscale.o, but the Makefile compiles the whole landsatMosaic directory, and
+# every file in it (xyscale.c included) does #include "landsatSource64/Lstrack/lstrack.h".
+# Without the repo present, that compile fails, xyscale.o is never produced, and the link
+# then fails on a missing object -- one cause presenting as two unrelated-looking errors.
+REPOS=(clib cRecipes triangle gdalIO landsatSource64 mosaicSource)
 
 # Branch per repo. clib/cRecipes/triangle are stable on master.
 #
@@ -58,6 +65,7 @@ declare -A BRANCH=(
     [clib]=master
     [cRecipes]=master
     [triangle]=master
+    [landsatSource64]=master
     [gdalIO]=main
     [mosaicSource]=master
 )
@@ -74,6 +82,7 @@ while [ $# -gt 0 ]; do
         --jobs)       JOBS="$2"; shift 2 ;;
         --hdf5-include) HDF5INC="$2"; shift 2 ;;
         --hdf5-lib)   HDF5LIB="$2"; shift 2 ;;
+        --gdal-libs)  GDALLIBS="$2"; shift 2 ;;
         --no-pull)    DOPULL=0; shift ;;
         --force)      FORCE=1; shift ;;
         --check-only) CHECKONLY=1; shift ;;
@@ -150,8 +159,32 @@ fi
     [ -n "${CONDA_PREFIX:-}" -a -f "${CONDA_PREFIX:-/nonexistent}/include/proj.h" ] || \
     echo "installGeomosaic: WARNING - proj.h not found; the link may fail on -lproj" >&2
 
+# The Makefile hardcodes a Debian-era GDAL link list:
+#   -lgdal -lproj -lcurl -lsqlite3 -llzma -lpoppler -lopenjp2 -lssh2 -llcms2
+# Those extras are unnecessary -- libgdal.so already carries them as NEEDED -- and on a conda
+# stack they are not there as linkable .so names at all, so the link dies on -llzma/-lpoppler.
+# Ask gdal-config instead, which also supplies the -L that conda needs. -lproj is added back
+# explicitly because common/grimpProj.c calls proj directly, not only through GDAL's OSR.
+# Verified on a system GDAL: the slim list produces a byte-identical binary.
+if [ -z "$GDALLIBS" ]; then
+    gc=""
+    # Prefer the gdal-config belonging to the SAME prefix as the headers we found, so a conda
+    # gdal-config on PATH cannot describe a system GDAL, or vice versa.
+    for cand in "$(dirname "$GDALINC")/bin/gdal-config" "$(dirname "$(dirname "$GDALINC")")/bin/gdal-config"; do
+        [ -x "$cand" ] && { gc="$cand"; break; }
+    done
+    [ -z "$gc" ] && gc="$(command -v gdal-config 2>/dev/null || true)"
+    if [ -n "$gc" ]; then
+        GDALLIBS="$($gc --libs) -lproj"
+    else
+        GDALLIBS="-lgdal -lproj"
+        echo "installGeomosaic: WARNING - no gdal-config found; linking with plain -lgdal -lproj" >&2
+    fi
+fi
+
 # This is the invisible dependency made explicit. Prepend, never clobber.
 export C_INCLUDE_PATH="$GDALINC${C_INCLUDE_PATH:+:$C_INCLUDE_PATH}"
+note "gdal libs    : $GDALLIBS"
 note "gdal headers : $GDALINC  (exported as C_INCLUDE_PATH)"
 note "hdf5 headers : $HDF5INC"
 note "hdf5 library : $HDF5LIB"
@@ -223,6 +256,7 @@ note "building geomosaic (-j$JOBS) into $BINDIR"
 makeArgs=()
 [ -n "$HDF5INC" ] && makeArgs+=("HDF5INCLUDE=$HDF5INC")
 [ -n "$HDF5LIB" ] && makeArgs+=("HDF5LIB=$HDF5LIB")
+[ -n "$GDALLIBS" ] && makeArgs+=("GDAL=$GDALLIBS")
 make -C "$GITROOT/mosaicSource" -j"$JOBS" geomosaic \
      ROOTDIR="$(dirname "$GITROOT")" \
      PROGDIR="$GITROOT" \
