@@ -1,7 +1,7 @@
 # Smoke test: two 6x6 deg tiles tested on petermann (paths relative to the repo root).
 # N42W012 = frequency A HH (Iberia, 6 granules); N24E006 = frequency A HH + B VV (Sahara).
 tileRun: cycle30/both          # tiling: cycle30/both | cycle30/ascending | cycle30/descending
-work: runs/smoke              # run directory: tiles, VRTs, googleEarth/, log
+work: /scratch/ianj/mosaics/smoke        # run directory (absolute, or relative to the repo): tiles, VRTs, googleEarth/, run.log
 granules: s3                   # s3 = direct S3 reads (AWS us-west-2 only) | vsicurl (anywhere) | local DIR
 tiles: [N42W012_6x6, N24E006_6x6]
 nProc: 24                      # concurrent single-threaded geomosaic jobs
