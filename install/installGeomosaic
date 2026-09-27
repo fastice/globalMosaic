@@ -1,0 +1,217 @@
+#!/usr/bin/env bash
+#
+# installGeomosaic -- clone/pull the GrIMP C repositories geomosaic needs, build them,
+# and install the geomosaic binary.
+#
+# geomosaic is the only GrIMP binary globalMosaic drives. It links five separate
+# repositories (GIT64 is not one repo -- every component is its own):
+#
+#     mosaicSource   geoMosaic/ common/ landsatMosaic/  (the binary itself)
+#     gdalIO         GDAL/GeoTIFF I/O
+#     clib           byte-swapped flat-file I/O
+#     cRecipes       SVD, interpolation
+#     triangle       Shewchuk triangulation
+#
+# They must sit side by side under one root (PROGDIR), because mosaicSource's Makefile
+# reaches across to $(PROGDIR)/<repo> -- see GEOMOSAICDIRS in mosaicSource/Makefile.
+#
+# Usage:
+#     installGeomosaic [options]
+#
+#       --gitroot DIR    where the repos live        [$HOME/progs/GIT64]
+#       --bindir DIR     where geomosaic is installed [$HOME/bin/$(uname -m)]
+#       --branch NAME    force this branch for EVERY repo (default: the table below)
+#       --ssh            clone over ssh instead of https
+#       --jobs N         parallel make jobs           [nproc]
+#       --no-pull        build what is on disk, do not fetch
+#       --force          discard local modifications when pulling
+#       --check-only     report what would happen, build nothing
+#       -h, --help
+#
+set -euo pipefail
+
+GITROOT="${GEOMOSAIC_GITROOT:-$HOME/progs/GIT64}"
+BINDIR="${GEOMOSAIC_BINDIR:-$HOME/bin/$(uname -m)}"
+FORCE_BRANCH=""
+PROTO=https
+JOBS="$(nproc 2>/dev/null || echo 4)"
+DOPULL=1
+FORCE=0
+CHECKONLY=0
+
+REPOS=(clib cRecipes triangle gdalIO mosaicSource)
+
+# Branch per repo. clib/cRecipes/triangle are stable on master.
+#
+# Note the defaults DIFFER: gdalIO uses main, everything else uses master.
+#
+# The arbitrary-EPSG work -- `-epsg 4326` (geographic output) and `dem none`, both of which
+# globalMosaic REQUIRES -- was merged into these default branches on 2026-09-27. If a clone
+# still comes up without those features, the remote has not received the merge yet; the
+# capability check at the end of this script is what catches that, rather than letting a
+# geomosaic that silently lacks the feature reach a 900-job run.
+declare -A BRANCH=(
+    [clib]=master
+    [cRecipes]=master
+    [triangle]=master
+    [gdalIO]=main
+    [mosaicSource]=master
+)
+
+die() { echo "installGeomosaic: $*" >&2; exit 1; }
+note() { echo "==> $*"; }
+
+while [ $# -gt 0 ]; do
+    case "$1" in
+        --gitroot)    GITROOT="$2"; shift 2 ;;
+        --bindir)     BINDIR="$2"; shift 2 ;;
+        --branch)     FORCE_BRANCH="$2"; shift 2 ;;
+        --ssh)        PROTO=ssh; shift ;;
+        --jobs)       JOBS="$2"; shift 2 ;;
+        --no-pull)    DOPULL=0; shift ;;
+        --force)      FORCE=1; shift ;;
+        --check-only) CHECKONLY=1; shift ;;
+        -h|--help)    sed -n '2,32p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+        *)            die "unknown option $1 (try --help)" ;;
+    esac
+done
+
+repoUrl() {
+    if [ "$PROTO" = ssh ]; then echo "git@github.com:fastice/$1.git"
+    else echo "https://github.com/fastice/$1.git"; fi
+}
+repoBranch() { [ -n "$FORCE_BRANCH" ] && echo "$FORCE_BRANCH" || echo "${BRANCH[$1]}"; }
+
+# ---------------------------------------------------------------- prerequisites
+note "checking prerequisites"
+missing=""
+for t in git make gcc g++; do
+    command -v "$t" >/dev/null 2>&1 || missing="$missing $t"
+done
+[ -n "$missing" ] && die "missing tools:$missing"
+
+# Header checks, not package-manager queries, so this works on any distro.
+hdrMissing=""
+[ -f /usr/include/gdal/gdal.h ] || [ -f /usr/include/gdal.h ] || hdrMissing="$hdrMissing libgdal-dev"
+[ -f /usr/include/hdf5/serial/hdf5.h ] || [ -f /usr/include/hdf5.h ] || hdrMissing="$hdrMissing libhdf5-dev"
+[ -f /usr/include/proj.h ] || hdrMissing="$hdrMissing libproj-dev"
+if [ -n "$hdrMissing" ]; then
+    echo "installGeomosaic: missing development headers:$hdrMissing" >&2
+    echo "  on Debian/Ubuntu:  sudo apt-get install -y$hdrMissing build-essential git" >&2
+    exit 1
+fi
+
+# geomosaic links the SYSTEM libgdal. A conda environment ahead of it on LD_LIBRARY_PATH can
+# load a different libgdal at run time than it was built against; warn rather than fail,
+# because it only matters if conda's is ABI-incompatible.
+if [ -n "${LD_LIBRARY_PATH:-}" ] && echo "$LD_LIBRARY_PATH" | grep -qiE 'conda|mamba'; then
+    echo "installGeomosaic: WARNING - a conda lib dir is on LD_LIBRARY_PATH." >&2
+    echo "  geomosaic builds against the SYSTEM libgdal; unset LD_LIBRARY_PATH if it misbehaves." >&2
+fi
+note "prerequisites OK (gdal, hdf5, proj headers present)"
+
+# ---------------------------------------------------------------- clone / pull
+mkdir -p "$GITROOT"
+note "repository root: $GITROOT"
+
+for r in "${REPOS[@]}"; do
+    br="$(repoBranch "$r")"
+    url="$(repoUrl "$r")"
+    d="$GITROOT/$r"
+
+    if [ ! -d "$d/.git" ]; then
+        # Fail loudly if the branch we need is not published, rather than silently
+        # falling back to the default branch and building a geomosaic without the
+        # features globalMosaic depends on.
+        if ! git ls-remote --heads "$url" "$br" 2>/dev/null | grep -q "refs/heads/$br$"; then
+            die "branch '$br' does not exist on $url
+  $r has not published that branch. Either push it, or re-run with
+  --branch <name> naming a branch that is on the remote."
+        fi
+        [ "$CHECKONLY" = 1 ] && { echo "    $r: would CLONE $url ($br)"; continue; }
+        note "cloning $r ($br)"
+        git clone --branch "$br" "$url" "$d"
+        continue
+    fi
+
+    cur="$(git -C "$d" rev-parse --abbrev-ref HEAD)"
+    dirty="$(git -C "$d" status --porcelain --untracked-files=no | wc -l)"
+    if [ "$CHECKONLY" = 1 ]; then
+        echo "    $r: on '$cur', want '$br', $dirty modified tracked file(s)"
+        continue
+    fi
+    if [ "$DOPULL" = 0 ]; then
+        note "$r: using working tree as-is (on '$cur')"
+        continue
+    fi
+    if [ "$dirty" -gt 0 ] && [ "$FORCE" = 0 ]; then
+        # Never discard someone's work to satisfy an install.
+        echo "installGeomosaic: WARNING - $r has $dirty modified tracked file(s) on '$cur';" >&2
+        echo "  leaving it alone and building what is there. Use --force to reset." >&2
+        continue
+    fi
+    note "updating $r -> $br"
+    git -C "$d" fetch --quiet origin
+    if [ "$FORCE" = 1 ]; then
+        git -C "$d" checkout --quiet -B "$br" "origin/$br" 2>/dev/null \
+            || git -C "$d" checkout --quiet "$br"
+        git -C "$d" reset --hard --quiet "origin/$br" 2>/dev/null || true
+    else
+        git -C "$d" checkout --quiet "$br"
+        # --ff-only: never create a merge commit behind the user's back.
+        git -C "$d" pull --quiet --ff-only origin "$br" || \
+            echo "installGeomosaic: WARNING - $r could not fast-forward; building current HEAD" >&2
+    fi
+done
+
+if [ "$CHECKONLY" = 1 ]; then
+    echo
+    echo "    would install to: $BINDIR/geomosaic"
+    exit 0
+fi
+
+# ---------------------------------------------------------------- build
+# ROOTDIR is only used to derive defaults the other two variables override, but the
+# Makefile expects it, so pass all three explicitly.
+mkdir -p "$BINDIR"
+note "building geomosaic (-j$JOBS) into $BINDIR"
+make -C "$GITROOT/mosaicSource" -j"$JOBS" geomosaic \
+     ROOTDIR="$(dirname "$GITROOT")" \
+     PROGDIR="$GITROOT" \
+     BINDIR="$BINDIR"
+
+[ -x "$BINDIR/geomosaic" ] || die "build finished but $BINDIR/geomosaic is not there"
+
+# ---------------------------------------------------------------- capability check
+# The real guarantee. A branch name can be wrong, a merge can drop a feature, an old
+# binary can be earlier on PATH -- none of which the build would complain about. This
+# runs the binary we just installed and confirms it actually does the two things
+# globalMosaic cannot work without: a geographic output grid, and no DEM.
+note "verifying the installed binary supports -epsg 4326 and dem none"
+tmp="$(mktemp -d)"
+trap 'rm -rf "$tmp"' EXIT
+printf 'frequency: A\npolarization: HH\nuseMask: 1\nfiles:\n' > "$tmp/empty.yaml"
+printf -- '-1.0 -1.0 0.01 0.01 0.001 0.001\n0\n' > "$tmp/tiny.in"
+# geomosaic is EXPECTED to exit non-zero here: the yaml lists no granules, so it stops with
+# "No range/Doppler or GCOV inputs". What is being tested is that it got far enough to accept
+# `dem none` and resolve EPSG:4326 -- an older binary dies earlier, trying to open none.geodat.
+# Output goes to a file rather than a pipe because `set -o pipefail` would otherwise report
+# the (expected) non-zero exit as a failed check.
+( cd "$tmp" && OPENBLAS_NUM_THREADS=1 "$BINDIR/geomosaic" -S1Cal -calOutput gamma0 \
+      -epsg 4326 -gcov empty.yaml tiny.in none capchk ) > "$tmp/capchk.log" 2>&1 || true
+if grep -q 'grid units are DEGREES' "$tmp/capchk.log"; then
+    note "capability check PASSED"
+else
+    die "the installed geomosaic does NOT support -epsg 4326 with 'dem none'.
+  It was built from branches that lack the arbitrary-EPSG work. Check the BRANCH
+  table at the top of this script against what is actually published."
+fi
+
+echo
+echo "geomosaic installed: $BINDIR/geomosaic"
+"$BINDIR/geomosaic" 2>&1 | head -1 || true
+echo
+echo "Add to PATH if needed:   export PATH=\"$BINDIR:\$PATH\""
+echo "Always set for runs:     export OPENBLAS_NUM_THREADS=1"
+echo "  (every binary linking libgdal pulls in libopenblas, whose constructor spawns an"
+echo "   idle thread pool sized to the machine before main(); no GrIMP code uses BLAS.)"

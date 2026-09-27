@@ -1,0 +1,8 @@
+catalogue cycle030/catalogue.geojson: 16160 granules, 11387 usable (H only); dropped {}
+tiles 730; granule-tile pairs available 23827, selected 9294; distinct granules used 6981 of 11387
+=== --exclude5MHzOcean
+catalogue cycle030/catalogue.geojson: 16160 granules, 11387 usable (H only); dropped {}
+tiles 730; granule-tile pairs available 23827, selected 9294; distinct granules used 6981 of 11387
+=== --allowV --exclude5MHzOcean
+catalogue cycle030/catalogue.geojson: 16160 granules, 16160 usable (H, V fallback); dropped {'5MHz ocean': 1043}
+tiles 788; granule-tile pairs available 30488, selected 10631; distinct granules used 8064 of 15117

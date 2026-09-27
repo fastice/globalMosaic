@@ -1,0 +1,24 @@
+# globalMosaic
+
+Global, lat/lon-tiled NISAR GCOV backscatter mosaics built with GrIMP `geomosaic`.
+
+| command | what it does |
+|---|---|
+| `globalGCOVTiles` | search ASF for one cycle (routine `L2_PR` products only), tile the area in lat/lon (6 x 6 deg to 60 deg, wider bands toward the poles, one polar stereographic tile per cap beyond 84 deg), and pick a non-redundant covering set of granules per tile (tiered 77 -> 40 -> 20 -> 5 MHz greedy cover); writes `tiles.geojson`, per-tile CSVs and geomosaic `-gcov` yamls |
+| `coverageMaps` | coverage map of a tiling run: mid-latitudes plus Arctic and Antarctic polar views, by bandwidth, uncovered land in red |
+| `makeGoogleEarth` | EPSG:4326 KML superoverlay of compressed 8-bit PNG tiles for Google Earth (gdal2tiles geodetic, `--zoom 0-9` default; 10 = full 3" resolution), polar caps warped in |
+| `runGeomosaicTiles` | run `geomosaic` on every tile (one thread per process, many processes; `-calOutput gamma0`, `dem none`, `-epsg 4326` / `3031` / `3413`), crop the feather margins and build the VRT hierarchy tile -> latitude band -> global |
+
+Direction, bandwidth and polarization come from granule file names (ASF's `flightDirection`
+is wrong for about 4% of granules). Needs a geomosaic with geographic output and `dem none`.
+
+`cycle30/` holds the cycle-030 tile descriptions: `catalogue.geojson` (the ASF search) and the
+tilings for `both` directions, `ascending` and `descending` (`--allowV --exclude5MHzOcean`).
+
+## Pixel convention
+
+GrIMP C programs (geomosaic included) work in **pixel-centre** coordinates: the input-file header
+origin is the centre of the first pixel. GeoTIFFs and VRTs are **edge** based; geomosaic's writer
+converts (origin minus half a pixel) unconditionally. `runGeomosaicTiles` therefore writes headers
+as tile edge + half a pixel, and crops using each output's own (edge-based) geotransform.
+geomosaic's `-center` flag is a no-op; the convention does not depend on it.

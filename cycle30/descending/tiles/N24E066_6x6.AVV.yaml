@@ -1,0 +1,6 @@
+# N24E066_6x6: 1 granules, frequency A
+polarization: VV
+frequency: A
+useMask: true
+files:
+  - NISAR_L2_PR_GCOV_030_092_D_076_2005_DVDV_A_20260912T141438_20260912T141448_P05023_N_P_J_001.h5

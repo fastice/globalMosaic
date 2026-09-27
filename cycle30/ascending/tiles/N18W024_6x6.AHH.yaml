@@ -1,0 +1,6 @@
+# N18W024_6x6: 1 granules, frequency A
+polarization: HH
+frequency: A
+useMask: true
+files:
+  - NISAR_L2_PR_GCOV_030_131_A_012_2005_DHDH_A_20260915T063323_20260915T063348_P05023_N_P_J_001.h5

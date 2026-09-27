@@ -1,0 +1,6 @@
+# S54W084_6x6: 1 granules, frequency A
+polarization: HH
+frequency: A
+useMask: true
+files:
+  - NISAR_L2_PR_GCOV_030_097_D_115_2005_DHDH_A_20260912T225531_20260912T225548_P05023_N_P_J_001.h5

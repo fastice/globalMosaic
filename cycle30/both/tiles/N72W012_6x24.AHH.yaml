@@ -1,0 +1,6 @@
+# N72W012_6x24: 1 granules, frequency A
+polarization: HH
+frequency: A
+useMask: true
+files:
+  - NISAR_L2_PR_GCOV_030_039_D_051_2005_DHDH_A_20260908T214623_20260908T214632_P05023_N_P_J_001.h5

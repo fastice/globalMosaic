@@ -1,0 +1,2 @@
+catalogue cycle30/catalogue.geojson: 16160 granules, 16159 usable (H, V fallback); dropped {'direction': 8033, '5MHz ocean': 580}
+tiles 745; granule-tile pairs available 15117, selected 9042; distinct granules used 5721 of 7546

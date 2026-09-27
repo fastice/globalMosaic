@@ -1,0 +1,40 @@
+[build-system]
+requires = ["setuptools", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "globalMosaic"
+version = "0.0.1"
+description = "Global lat/lon tiling of NISAR GCOV granules and a standalone geomosaic tile driver"
+authors = [
+    { name = "Ian Joughin", email = "irj@uw.edu" }
+]
+license = { text = "MIT" }
+readme = "README.md"
+keywords = ["SAR", "NISAR", "GCOV", "GrIMP", "mosaic"]
+requires-python = ">=3.8"
+
+dependencies = [
+    "numpy",
+    "shapely",
+    "rasterio",
+    "pyproj",
+    "cartopy",
+    "matplotlib",
+    "asf_search",
+    "GDAL"
+]
+
+[tool.setuptools]
+packages = ["globalMosaic"]
+
+[project.scripts]
+globalGCOVTiles = "globalMosaic.globalGCOVTiles:main"
+"globalGCOVTiles.py" = "globalMosaic.globalGCOVTiles:main"
+coverageMaps = "globalMosaic.coverageMaps:main"
+"coverageMaps.py" = "globalMosaic.coverageMaps:main"
+runGeomosaicTiles = "globalMosaic.runGeomosaicTiles:main"
+"runGeomosaicTiles.py" = "globalMosaic.runGeomosaicTiles:main"
+installGeomosaic = "globalMosaic.installGeomosaic:main"
+makeGoogleEarth = "globalMosaic.makeGoogleEarth:main"
+"makeGoogleEarth.py" = "globalMosaic.makeGoogleEarth:main"

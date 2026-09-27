@@ -1,0 +1,23 @@
+catalogue c030_both/catalogue.geojson: 16160 granules, 16160 usable (H, V fallback); dropped {'5MHz ocean': 1043}
+tiles 788; granule-tile pairs available 30488, selected 10631; distinct granules used 8064 of 15117
+=== direction A
+catalogue c030_both/catalogue.geojson: 16160 granules, 16160 usable (H, V fallback); dropped {'direction': 8033, '5MHz ocean': 580}
+tiles 745; granule-tile pairs available 15120, selected 9031; distinct granules used 5718 of 7547
+=== direction D
+catalogue c030_both/catalogue.geojson: 16160 granules, 16160 usable (H, V fallback); dropped {'direction': 8127, '5MHz ocean': 463}
+tiles 769; granule-tile pairs available 15368, selected 9409; distinct granules used 5857 of 7570
+=== coverage both
+8064 granules selected; land (to 77.5N, incl. Antarctic ice shelves) 147.6 M km2; uncovered land 0.42 M km2 (0.3%)
+  Antarctic (<60S)   uncovered   0.22 of   13.8 M km2 (1.6%)
+  mid-latitude       uncovered   0.16 of  117.5 M km2 (0.1%)
+  Arctic (>60N)      uncovered   0.04 of   16.3 M km2 (0.3%)
+=== coverage A
+5718 granules selected; land (to 77.5N, incl. Antarctic ice shelves) 147.6 M km2; uncovered land 3.74 M km2 (2.5%)
+  Antarctic (<60S)   uncovered   0.34 of   13.8 M km2 (2.5%)
+  mid-latitude       uncovered   3.29 of  117.5 M km2 (2.8%)
+  Arctic (>60N)      uncovered   0.11 of   16.3 M km2 (0.7%)
+=== coverage D
+5857 granules selected; land (to 77.5N, incl. Antarctic ice shelves) 147.6 M km2; uncovered land 3.66 M km2 (2.5%)
+  Antarctic (<60S)   uncovered   0.27 of   13.8 M km2 (2.0%)
+  mid-latitude       uncovered   3.24 of  117.5 M km2 (2.8%)
+  Arctic (>60N)      uncovered   0.15 of   16.3 M km2 (0.9%)
