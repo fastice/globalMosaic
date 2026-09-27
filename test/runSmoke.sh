@@ -1,6 +1,6 @@
 #!/bin/bash
 # Smoke test in the foreground: mosaic (test/smoke.yaml, about 10 min on petermann, nearly all
-# download from ASF), then quick-look PNGs (<work>/quicklook/) and Google Earth tiles. Everything goes in the yaml's work directory:
+# download from ASF), then quick-look PNGs (<work>/quicklooks/) and Google Earth tiles. Everything goes in the yaml's work directory:
 # <work>/run.log, <work>/vrt/, <work>/googleEarth/doc.kml.
 set -euo pipefail
 cd "$(dirname "$0")/.."

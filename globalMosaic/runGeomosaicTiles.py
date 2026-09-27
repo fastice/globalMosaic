@@ -47,6 +47,10 @@ Outputs (--work DIR)
   vrt/<product>/global.vrt       all lat/lon bands (resampled to the finest spacing on read)
   vrt/<product>/cap_<name>.vrt   polar cap tiles (EPSG 3031/3413, own CRS, not in global.vrt)
   products: gamma0 by default (-calOutput gamma0); --calOutput both adds sigma0
+  quicklooks/progress.png, progress.txt   updated while the run goes (--progressMinutes): tiles
+                 done so far in grey over the planned tiles in blue (failed tiles red), and
+                 counts / elapsed / ETA;
+                 quicklooks/progress/<tile>.<grp>.tif are the per-job low-res pieces
 Polar caps
   Poleward of 84 deg the tiler makes one polar stereographic tile per pole (lat/lon degenerates
   there): header in km, --psResM spacing, -epsg 3031 / 3413.
@@ -64,6 +68,7 @@ import threading
 import time
 
 import requests
+import numpy as np
 import yaml
 from osgeo import gdal
 
@@ -218,6 +223,84 @@ def cropToTile(src, dst, grid):
                    creationOptions=['TILED=YES', 'COMPRESS=DEFLATE', 'PREDICTOR=2', 'BIGTIFF=IF_SAFER'])
 
 
+class Progress:
+    '''
+    Low-resolution picture of a run while it goes: quicklooks/progress.png (lat/lon tiles done so
+    far, in grey, over the planned tiles in blue; polar caps in quicklooks/progress_<cap>.png) and
+    quicklooks/progress.txt (jobs done / failed / total, elapsed, ETA).
+    '''
+    RES, CAPRES = 0.1, 5000.       # progress image spacing: deg for lat/lon tiles, m for caps
+
+    def __init__(self, work, feats, jobs, grids, product):
+        self.dir, self.total, self.done, self.failed = f'{work}/quicklooks', len(jobs), 0, 0
+        self.t0, self.pieces, self.caps = time.time(), [], {}
+        os.makedirs(f'{self.dir}/progress', exist_ok=True)
+        self.planned = {j[0]: (grids[j[2]]['tile'], grids[j[2]]['epsg']) for j in jobs}
+        self.failedTiles = set()
+        latlon = [t for t, e in self.planned.values() if e == 4326]
+        self.s = min((t[1] for t in latlon), default=-90.)
+        self.n = max((t[3] for t in latlon), default=90.)
+
+    def addJob(self, name, grp, tif):
+        out = f'{self.dir}/progress/{name}.{grp}.tif'
+        epsg = int(gdal.Open(tif).GetSpatialRef().GetAuthorityCode(None))
+        r = self.RES if epsg == 4326 else self.CAPRES
+        gdal.Translate(out, tif, xRes=r, yRes=r, resampleAlg='average', noData=NODATA)
+        if epsg == 4326:
+            # frequency B pieces go first, so A is painted over them
+            self.pieces.insert(0, out) if grp.startswith('B') else self.pieces.append(out)
+        else:
+            self.caps.setdefault(name, []).insert(0 if grp.startswith('B') else 99, out)
+
+    def count(self, ok, name):
+        self.done += 1
+        if not ok:
+            self.failed += 1
+            self.failedTiles.add(name)
+
+    def draw(self):
+        from .makeQuickLook import stretch
+        nx, ny = int(round(360 / self.RES)), int(round((self.n - self.s) / self.RES))
+        rgb = np.zeros((ny, nx, 3), np.uint8)
+        alpha = np.zeros((ny, nx), np.uint8)
+        for name, ((w, s, e, n), epsg) in self.planned.items():   # planned: pale blue, failed: red
+            if epsg != 4326:
+                continue
+            j0, j1 = int(round((w + 180) / self.RES)), int(round((e + 180) / self.RES))
+            i0, i1 = int(round((self.n - n) / self.RES)), int(round((self.n - s) / self.RES))
+            rgb[i0:i1, j0:j1] = (220, 40, 40) if name in self.failedTiles else (170, 200, 235)
+            alpha[i0:i1, j0:j1] = 255
+        if self.pieces:
+            vrt = gdal.BuildVRT('', self.pieces, outputBounds=(-180, self.s, 180, self.n),
+                                resolution='user', xRes=self.RES, yRes=self.RES,
+                                srcNodata=NODATA, VRTNodata=NODATA)
+            a = vrt.GetRasterBand(1).ReadAsArray(buf_xsize=nx, buf_ysize=ny)
+            g = stretch(a)
+            have = a != NODATA
+            rgb[have] = g[have][:, None]
+            alpha[have] = 255
+        writeRGBA(rgb, alpha, f'{self.dir}/progress.png')
+        for cap, pieces in self.caps.items():
+            vrt = gdal.BuildVRT('', pieces, srcNodata=NODATA, VRTNodata=NODATA)
+            a = vrt.GetRasterBand(1).ReadAsArray()
+            g = stretch(a)
+            writeRGBA(np.repeat(g[..., None], 3, 2), np.where(a != NODATA, 255, 0).astype(np.uint8),
+                      f'{self.dir}/progress_{cap}.png')
+        el = time.time() - self.t0
+        eta = el / self.done * (self.total - self.done) if self.done else float('nan')
+        with open(f'{self.dir}/progress.txt', 'w') as fp:
+            fp.write(f'{time.strftime("%m-%d %H:%M:%S")}  jobs done {self.done} of {self.total} '
+                     f'({self.failed} failed); elapsed {el / 3600:.2f} h; ETA {eta / 3600:.2f} h\n')
+
+
+def writeRGBA(rgb, alpha, png):
+    mem = gdal.GetDriverByName('MEM').Create('', rgb.shape[1], rgb.shape[0], 4, gdal.GDT_Byte)
+    for b in range(3):
+        mem.GetRasterBand(b + 1).WriteArray(rgb[..., b])
+    mem.GetRasterBand(4).WriteArray(alpha)
+    gdal.GetDriverByName('PNG').CreateCopy(png, mem, options=['ZLEVEL=6'])
+
+
 def parseWithConfig(ap):
     '''
     Parse the command line over the --config yaml: yaml keys become defaults (unknown keys are an
@@ -261,6 +344,8 @@ def main():
     ap.add_argument('--geomosaic', default='geomosaic', help='geomosaic executable [on PATH]')
     ap.add_argument('--retries', type=int, default=2,
                     help='re-run a job that died on a remote/network error [2]')
+    ap.add_argument('--progressMinutes', type=float, default=5.,
+                    help='refresh quicklooks/progress.png and progress.txt this often [5]')
     ap.add_argument('--dryRun', action='store_true', help='write job dirs, print commands, run nothing')
     args = parseWithConfig(ap)
 
@@ -308,8 +393,13 @@ def main():
 
     failed = []
     s3Keys = S3Keys() if args.granules == 's3' else None
+    progress = Progress(args.work, feats, jobs, grids, products[-1])
+    lastDraw = time.time()
     with concurrent.futures.ThreadPoolExecutor(args.nProc) as pool:
-        for jobDir, rc, sec, note in pool.map(lambda j: runJob(j[2], jobCmd(j[2]), products, args.retries, s3Keys), jobs):
+        futures = {pool.submit(runJob, j[2], jobCmd(j[2]), products, args.retries, s3Keys): j for j in jobs}
+        for fut in concurrent.futures.as_completed(futures):
+            name, grp, _ = futures[fut]
+            jobDir, rc, sec, note = fut.result()
             ok = rc == 0 and not note.startswith('missing')
             status = 'OK' if ok else f'FAILED rc={rc}'
             log(f'{os.path.basename(jobDir)}: {sec / 60:.1f} min {status} {note}', summary)
@@ -320,6 +410,18 @@ def main():
                         if any(k in l.lower() for k in ('error', 'fail', 'denied', 'http'))]
                 for l in errs[-3:]:
                     log(f'    {l[:300]}', summary)
+            else:
+                # crop now, so the tile and its progress quick look exist while the run goes on
+                for product in products:
+                    dst = f'{args.work}/tiles/{product}/{name}.{grp}.tif'
+                    if not os.path.exists(dst):
+                        cropToTile(f'{jobDir}/out.{product}.tif', dst, grids[jobDir])
+                progress.addJob(name, grp, f'{args.work}/tiles/{products[-1]}/{name}.{grp}.tif')
+            progress.count(ok, name)
+            if time.time() - lastDraw > args.progressMinutes * 60:
+                progress.draw()
+                lastDraw = time.time()
+    progress.draw()
     if len(failed) == len(jobs):
         log(f'all {len(jobs)} jobs failed; no VRTs built (see {args.work}/jobs/*/log)', summary)
         return 1

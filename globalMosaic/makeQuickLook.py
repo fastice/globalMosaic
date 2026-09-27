@@ -4,7 +4,7 @@ Quick-look PNGs of a runGeomosaicTiles run, for viewing in a browser or Jupyter.
 
   makeQuickLook run_c030 [--tileRes 0.01] [--globalRes 0.05] [--processes 24]
 
-Writes <work>/quicklook/:
+Writes <work>/quicklooks/ (next to the progress images runGeomosaicTiles keeps there):
   tiles/<tile>.png   each tile (frequency B under A) at --tileRes deg (0.01 deg ~ 1 km)
   global.png         all lat/lon tiles at --globalRes deg (0.05 deg ~ 5 km), from the tile
                      quick looks, so the full-resolution mosaic is read only once
@@ -24,11 +24,16 @@ gdal.UseExceptions()
 NODATA = -3000
 
 
-def writePng(ds, png, dbMin, dbMax):
-    ''' int16 dB x 100 dataset -> 8-bit grey PNG, nodata (0) transparent. '''
-    a = ds.GetRasterBand(1).ReadAsArray()
+def stretch(a, dbMin=-24., dbMax=-1.):
+    ''' int16 dB x 100 -> byte 1..255 over dbMin..dbMax; nodata -> 0. '''
     b = np.clip((a / 100. - dbMin) / (dbMax - dbMin) * 254. + 1., 1, 255).astype(np.uint8)
     b[a == NODATA] = 0
+    return b
+
+
+def writePng(ds, png, dbMin, dbMax):
+    ''' int16 dB x 100 dataset -> 8-bit grey PNG, nodata (0) transparent. '''
+    b = stretch(ds.GetRasterBand(1).ReadAsArray(), dbMin, dbMax)
     mem = gdal.GetDriverByName('MEM').Create('', b.shape[1], b.shape[0], 1, gdal.GDT_Byte)
     mem.GetRasterBand(1).WriteArray(b)
     mem.GetRasterBand(1).SetNoDataValue(0)
@@ -60,7 +65,7 @@ def main():
     args = ap.parse_args()
 
     vrtDir = f'{args.work}/vrt/{args.product}'
-    qlDir = f'{args.work}/quicklook'
+    qlDir = f'{args.work}/quicklooks'
     os.makedirs(f'{qlDir}/tiles', exist_ok=True)
     everything = sorted(glob.glob(f'{vrtDir}/*.vrt'))
     caps = [v for v in everything if os.path.basename(v).startswith('cap_')]
