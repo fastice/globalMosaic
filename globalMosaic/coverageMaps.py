@@ -34,12 +34,28 @@ def main():
     ap.add_argument('runDir')
     ap.add_argument('--title', default=None)
     ap.add_argument('--latMax', type=float, default=77.5, help='northern limit of the tiling [77.5]')
+    ap.add_argument('--validFootprints', nargs='+', default=None,
+                    help='scanMasks outputs [validFootprints*.geojson in the run dir or its parent]')
     args = ap.parse_args()
     # the run's own catalogue, else the shared one in its parent (e.g. cycle30/catalogue.geojson)
     here = f'{args.runDir}/catalogue.geojson'
     cat = json.load(open(here if os.path.exists(here) else
                          f'{os.path.dirname(os.path.abspath(args.runDir))}/catalogue.geojson'))
     geoms = {f['properties']['name']: f['geometry'] for f in cat['features']}
+    # fill-cycle catalogues (catalogueNNN.geojson) next to the main one
+    catDir = args.runDir if os.path.exists(here) else os.path.dirname(os.path.abspath(args.runDir))
+    for extra in sorted(glob.glob(f'{catDir}/catalogue[0-9][0-9][0-9].geojson')):
+        for f in json.load(open(extra))['features']:
+            geoms.setdefault(f['properties']['name'], f['geometry'])
+    # valid-data footprints (scanMasks) replace acquisition footprints where available, so the
+    # map shows what geomosaic will actually fill (mask 0 = partially focused is dropped)
+    vfPaths = args.validFootprints or (sorted(glob.glob(f'{args.runDir}/validFootprints*.geojson')) or
+        sorted(glob.glob(f'{os.path.dirname(os.path.abspath(args.runDir))}/validFootprints*.geojson')))
+    for vfPath in vfPaths:
+        for f in json.load(open(vfPath))['features']:
+            geoms[f['properties']['name']] = f['geometry']
+        print(f'valid-data footprints from {vfPath}')
+    geoms = {k: v for k, v in geoms.items() if v is not None}
     sel = {}
     for f in glob.glob(f'{args.runDir}/tiles/*.csv'):
         for row in csv.DictReader(open(f)):
@@ -78,7 +94,7 @@ def main():
             eps, areaOf = 0.02, (lambda g: transform(eqArea, g).area / 1e6)
         tiers = {}
         for label, test, _ in TIERS:
-            polys = [toGeom(geoms[n]) for n, bw in sel.items() if test(bw)]
+            polys = [toGeom(geoms[n]) for n, bw in sel.items() if test(bw) and n in geoms]
             tiers[label] = unary_union(polys).buffer(0).intersection(clipR) if polys else None
         cov = unary_union([g for g in tiers.values() if g is not None]).buffer(0)
         # drop zero-width slivers narrower than ~2 km; real gaps survive the opening

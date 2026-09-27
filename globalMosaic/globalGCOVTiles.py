@@ -153,7 +153,7 @@ def searchCatalogue(cycle, outFile):
     return outFile
 
 
-def loadGranules(catalogue, allowV=False):
+def loadGranules(catalogue, allowV=False, fill=0):
     grans = []
     feats = json.load(open(catalogue))['features']
     # keep one copy per scene (P over X, then highest version) -- also for catalogues written
@@ -170,7 +170,7 @@ def loadGranules(catalogue, allowV=False):
         if p is None:
             continue
         p.update(name=name, url=f['properties'].get('url', ''), raw=f['geometry'],
-                 geom=unwrap(shape(f['geometry']).buffer(0)))
+                 geom=unwrap(shape(f['geometry']).buffer(0)), fill=fill)
         grans.append(p)
     return grans
 
@@ -215,7 +215,9 @@ def selectForTile(tileBox, cands, marginKm, cellDeg, minNewFrac):
 
 
 def greedyCover(masks, shape2d, minNewFrac):
-    ''' Tiered greedy set cover over rasterised footprints [(granule, bool mask)]. '''
+    ''' Tiered greedy set cover over rasterised footprints [(granule, bool mask)]. Tiers: the main
+    catalogue (fill 0) through all bandwidths first, then each fill catalogue (--fillCatalogues)
+    in turn, which therefore only covers what the main cycle leaves open. '''
     ny, nx = shape2d
     union = np.zeros((ny, nx), bool)
     for _, m in masks:
@@ -223,8 +225,9 @@ def greedyCover(masks, shape2d, minNewFrac):
     covered = np.zeros((ny, nx), bool)
     picks = []
     minNew = max(int(minNewFrac * nx * ny), 1)
-    for bw in sorted({g['bw'] for g, _ in masks}, reverse=True):
-        tier = sorted([(g, m) for g, m in masks if g['bw'] == bw], key=lambda gm: gm[0]['mixed'])
+    for fill, bw in sorted({(g.get('fill', 0), -g['bw']) for g, _ in masks}):
+        tier = sorted([(g, m) for g, m in masks if g.get('fill', 0) == fill and g['bw'] == -bw],
+                      key=lambda gm: gm[0]['mixed'])
         while tier:
             gains = [(int((m & ~covered).sum()) - (0.5 if g['mixed'] else 0), i)
                      for i, (g, m) in enumerate(tier)]
@@ -305,12 +308,22 @@ def main():
                     help='use the V channel of granules that have no H channel (e.g. 5 MHz SV-only '
                     'modes over land); the channel used is in each tile CSV')
     ap.add_argument('--noMixed', action='store_true', help='drop mixed-mode (_M_) granules')
+    ap.add_argument('--fillCatalogues', nargs='+', default=[],
+                    help='catalogues of other cycles (e.g. cycle30/catalogue029.geojson), used in the '
+                    'order given, only where the main catalogue leaves a tile uncovered')
+    ap.add_argument('--validFootprints', nargs='+', default=None,
+                    help='scanMasks output: use each scanned granule\'s valid-data footprint (mask '
+                    '1..254) instead of its acquisition footprint; drop it when too little is valid')
+    ap.add_argument('--minValid', type=float, default=0.05,
+                    help='with --validFootprints: drop granules with less valid data than this [0.05]')
     args = ap.parse_args()
 
     os.makedirs(f'{args.out}/tiles', exist_ok=True)
     catalogue = args.catalogue or searchCatalogue(args.cycle, f'{args.out}/catalogue.geojson')
     nCat = len(json.load(open(catalogue))['features'])
     grans = loadGranules(catalogue, args.allowV)
+    for k, fc in enumerate(args.fillCatalogues, 1):
+        grans += loadGranules(fc, args.allowV, fill=k)
     nAll = len(grans)
     dropped = Counter()
     if args.direction != 'both':
@@ -319,6 +332,21 @@ def main():
     if args.noMixed:
         dropped['mixed'] = sum(g['mixed'] for g in grans)
         grans = [g for g in grans if not g['mixed']]
+    if args.validFootprints:
+        # partially focused (mask 0) samples are dropped by geomosaic: select on what is valid
+        vf = {f['properties']['name']: f for path in args.validFootprints
+              for f in json.load(open(path))['features']}
+        keep = []
+        for g in grans:
+            v = vf.get(g['name'])
+            if v is not None:
+                if v['geometry'] is None or v['properties']['validFrac'] < args.minValid:
+                    dropped['no valid data (mask)'] += 1
+                    continue
+                g['geom'] = unwrap(shape(v['geometry']).buffer(0))
+                g['raw'] = v['geometry']
+            keep.append(g)
+        grans = keep
     if args.exclude5MHzOcean:
         import cartopy.feature as cf
         land = unary_union(list(cf.LAND.with_scale('50m').geometries()))

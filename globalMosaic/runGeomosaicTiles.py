@@ -132,6 +132,21 @@ def tileGrid(props, geom, res, psResM, featherKm):
                 fl=round(featherKm / (res * 111.32)))
 
 
+def jobInputs(yamlPath):
+    ''' What a job's result depends on in its gcov.yaml: the granule names (not how they are
+    reached -- vsicurl, s3 or a local copy) and the other settings. None if there is no yaml. '''
+    if not os.path.exists(yamlPath):
+        return None
+    names, other = [], []
+    for line in open(yamlPath):
+        s = line.strip()
+        if s.startswith('- '):
+            names.append(os.path.basename(s[2:]).split('.h5')[0])
+        elif s and not s.startswith('#'):
+            other.append(s)
+    return sorted(names), other
+
+
 def writeJob(jobDir, grid, yamlIn, csvRows, spec, factorFrom):
     os.makedirs(jobDir, exist_ok=True)
     # geomosaic input file: first-pixel CENTRE (always -- the writer subtracts half a pixel), size
@@ -447,7 +462,14 @@ def main():
         for y in sorted(glob.glob(f'{args.tileRun}/tiles/{name}.*.yaml')):
             grp = y.split('.')[-2]                       # e.g. AHH, BHH, BVV
             jobDir = f'{args.work}/jobs/{name}.{grp}'
+            before = jobInputs(f'{jobDir}/gcov.yaml')
             writeJob(jobDir, grid, y, rows, args.granules, args.factorFrom)
+            if before is not None and before != jobInputs(f'{jobDir}/gcov.yaml'):
+                # the tiling changed this job's granules: drop its old results so it is redone
+                for old in glob.glob(f'{jobDir}/out.*.tif') + glob.glob(f'{args.work}/tiles/*/{name}.{grp}.tif') \
+                        + glob.glob(f'{args.work}/quicklooks/progress/{name}.{grp}.tif'):
+                    os.remove(old)
+                log(f'{name}.{grp}: granule list changed -- will be redone', summary)
             jobs.append((name, grp, jobDir))
             grids[jobDir] = grid
         if grid['epsg'] == 4326:
