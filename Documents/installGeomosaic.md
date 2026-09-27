@@ -63,6 +63,47 @@ Two traps live here:
 
 Once that branch is merged, set both entries in the `BRANCH` table to each repo's default.
 
+## Portability: what is detected, and why
+
+Two build inputs vary by machine, and the Makefile hardcodes Debian's answer for both. The
+script detects them and passes them in, so it is not limited to Ubuntu.
+
+**`gdal.h` is an invisible dependency.** The code does `#include "gdal.h"` and *nothing in the
+Makefile adds an include path for it on Linux*. On Ian's machines it resolves only because
+`~/.cshrc` exports `C_INCLUDE_PATH=/usr/include/gdal`. In any clean environment the build dies
+with `fatal error: gdal.h: No such file or directory`. The script finds the directory itself
+(`/usr/include/gdal`, `/usr/include`, `/usr/local/include`, `$CONDA_PREFIX/include`, or
+`$GDAL_INCLUDE`) and exports `C_INCLUDE_PATH`, prepending rather than clobbering.
+
+**The HDF5 layout is Debian-specific.** The Makefile uses `/usr/include/hdf5/serial` and
+`-lhdf5_serial`, which is Debian's serial/MPI split. RHEL, Amazon Linux and Alpine put the
+header at `/usr/include/hdf5.h` and the library at `-lhdf5`, so the hardcoded values fail there
+even with `hdf5-devel` installed. The script probes for both layouts and picks the right
+`-l` name, overridable with `--hdf5-include` / `--hdf5-lib`.
+
+Verified by building under `env -i` (no `C_INCLUDE_PATH`, minimal `PATH`): produces a binary
+byte-identical to a normal build.
+
+## No root? You probably only need the HDF5 headers
+
+`geomosaic` gained its direct libhdf5 dependency with the float16 GCOV fast path; nothing else
+in the build needs HDF5. So a machine that compiled an **earlier** version of this code has
+GDAL and PROJ but may lack HDF5 headers entirely.
+
+The HDF5 *runtime* is guaranteed present wherever GDAL is — `libgdal` depends on it — so only
+headers are missing, and you can supply those without root:
+
+```bash
+apt-get download libhdf5-dev && dpkg -x libhdf5-dev_*.deb $HOME/hdf5dev   # Debian, no root
+installGeomosaic --hdf5-include $HOME/hdf5dev/usr/include/hdf5/serial \
+                 --hdf5-lib /usr/lib/x86_64-linux-gnu/libhdf5_serial.so.103
+```
+
+Linking the runtime GDAL itself loads is **ABI-safe by construction** — the process never holds
+two different HDF5s. Installing conda's `hdf5` alongside system GDAL would do exactly that, and
+symbol interposition between two libhdf5 versions produces wrong data rather than a clean
+error. Do not go that way.
+
 ## The capability check is the real guarantee
 
 A branch name can be stale, a merge can drop a feature, an old binary can sit earlier on

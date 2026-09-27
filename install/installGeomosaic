@@ -23,6 +23,8 @@
 #       --branch NAME    force this branch for EVERY repo (default: the table below)
 #       --ssh            clone over ssh instead of https
 #       --jobs N         parallel make jobs           [nproc]
+#       --hdf5-include D HDF5 serial headers, if not in /usr/include (no-root route)
+#       --hdf5-lib SPEC  HDF5 library to link, e.g. an absolute .so path
 #       --no-pull        build what is on disk, do not fetch
 #       --force          discard local modifications when pulling
 #       --check-only     report what would happen, build nothing
@@ -37,6 +39,8 @@ PROTO=https
 JOBS="$(nproc 2>/dev/null || echo 4)"
 DOPULL=1
 FORCE=0
+HDF5INC=""
+HDF5LIB=""
 CHECKONLY=0
 
 REPOS=(clib cRecipes triangle gdalIO mosaicSource)
@@ -68,6 +72,8 @@ while [ $# -gt 0 ]; do
         --branch)     FORCE_BRANCH="$2"; shift 2 ;;
         --ssh)        PROTO=ssh; shift ;;
         --jobs)       JOBS="$2"; shift 2 ;;
+        --hdf5-include) HDF5INC="$2"; shift 2 ;;
+        --hdf5-lib)   HDF5LIB="$2"; shift 2 ;;
         --no-pull)    DOPULL=0; shift ;;
         --force)      FORCE=1; shift ;;
         --check-only) CHECKONLY=1; shift ;;
@@ -90,26 +96,65 @@ for t in git make gcc g++; do
 done
 [ -n "$missing" ] && die "missing tools:$missing"
 
-# Header checks, not package-manager queries, so this works on any distro.
-hdrMissing=""
-[ -f /usr/include/gdal/gdal.h ] || [ -f /usr/include/gdal.h ] || hdrMissing="$hdrMissing libgdal-dev"
-[ -f /usr/include/hdf5/serial/hdf5.h ] || [ -f /usr/include/hdf5.h ] || hdrMissing="$hdrMissing libhdf5-dev"
-[ -f /usr/include/proj.h ] || hdrMissing="$hdrMissing libproj-dev"
-if [ -n "$hdrMissing" ]; then
-    echo "installGeomosaic: missing development headers:$hdrMissing" >&2
-    echo "  on Debian/Ubuntu:  sudo apt-get install -y$hdrMissing build-essential git" >&2
+# Locate GDAL and HDF5 rather than assuming a layout. Two things vary and both have bitten:
+#
+#  1. gdal.h. The code does #include "gdal.h", and NOTHING in the Makefile adds an include
+#     path for it on Linux. On Ian's machines it resolves only because ~/.cshrc exports
+#     C_INCLUDE_PATH=/usr/include/gdal -- an invisible dependency that does not exist on a
+#     fresh instance, where the build dies with "gdal.h: No such file or directory". This
+#     script therefore finds the directory and exports C_INCLUDE_PATH itself.
+#
+#  2. The HDF5 layout is Debian-specific in the Makefile (/usr/include/hdf5/serial and
+#     -lhdf5_serial). RHEL/Amazon Linux/Alpine put the header at /usr/include/hdf5.h and the
+#     library at -lhdf5, so the hardcoded values fail there even with hdf5-devel installed.
+findDir() {  # findDir <header> <candidate dirs...>
+    local h="$1"; shift
+    for d in "$@"; do [ -n "$d" ] && [ -f "$d/$h" ] && { echo "$d"; return 0; }; done
+    return 1
+}
+
+GDALINC="$(findDir gdal.h /usr/include/gdal /usr/include /usr/local/include \
+                   ${CONDA_PREFIX:+$CONDA_PREFIX/include} ${GDAL_INCLUDE:-})" || {
+    echo "installGeomosaic: cannot find gdal.h" >&2
+    echo "  looked in /usr/include/gdal, /usr/include, /usr/local/include${CONDA_PREFIX:+, \$CONDA_PREFIX/include}" >&2
+    echo "  install GDAL development headers (libgdal-dev / gdal-devel), or set GDAL_INCLUDE." >&2
+    exit 1
+}
+[ -z "$HDF5INC" ] && HDF5INC="$(findDir hdf5.h /usr/include/hdf5/serial /usr/include \
+                   /usr/local/include ${CONDA_PREFIX:+$CONDA_PREFIX/include})" || true
+if [ -z "$HDF5INC" ]; then
+    echo "installGeomosaic: cannot find hdf5.h" >&2
+    echo "  geomosaic reads float16 GCOV bands through libhdf5 directly, so this is required." >&2
+    rt=$(ls /usr/lib*/libhdf5*.so.* /usr/lib/*/libhdf5*.so.* 2>/dev/null | head -1)
+    if [ -n "$rt" ]; then
+        echo "  The HDF5 RUNTIME is present ($rt) -- only headers are missing." >&2
+        echo "  With no root, unpack just the headers and point at the existing library:" >&2
+        echo "    installGeomosaic --hdf5-include <dir with hdf5.h> --hdf5-lib $rt" >&2
+    else
+        echo "  install HDF5 development headers (libhdf5-dev / hdf5-devel)." >&2
+    fi
     exit 1
 fi
-
-# geomosaic links the SYSTEM libgdal. A conda environment ahead of it on LD_LIBRARY_PATH can
-# load a different libgdal at run time than it was built against; warn rather than fail,
-# because it only matters if conda's is ABI-incompatible.
-if [ -n "${LD_LIBRARY_PATH:-}" ] && echo "$LD_LIBRARY_PATH" | grep -qiE 'conda|mamba'; then
-    echo "installGeomosaic: WARNING - a conda lib dir is on LD_LIBRARY_PATH." >&2
-    echo "  geomosaic builds against the SYSTEM libgdal; unset LD_LIBRARY_PATH if it misbehaves." >&2
+# Library name follows the layout: Debian splits serial/mpi, everyone else does not.
+if [ -z "$HDF5LIB" ]; then
+    # Debian/Ubuntu ship only libhdf5_serial.so (serial/mpi split); everyone else ships
+    # libhdf5.so. Probe each directory separately -- a single `ls` over several globs
+    # returns non-zero if ANY of them misses, which silently picked the wrong name.
+    HDF5LIB="-lhdf5"
+    for d in /usr/lib/$(uname -m)-linux-gnu /usr/lib64 /usr/lib /usr/local/lib \
+             ${CONDA_PREFIX:+$CONDA_PREFIX/lib}; do
+        if ls "$d"/libhdf5_serial.so* >/dev/null 2>&1; then HDF5LIB="-lhdf5_serial"; break; fi
+    done
 fi
-note "prerequisites OK (gdal, hdf5, proj headers present)"
+[ -f /usr/include/proj.h ] || [ -f /usr/local/include/proj.h ] || \
+    [ -n "${CONDA_PREFIX:-}" -a -f "${CONDA_PREFIX:-/nonexistent}/include/proj.h" ] || \
+    echo "installGeomosaic: WARNING - proj.h not found; the link may fail on -lproj" >&2
 
+# This is the invisible dependency made explicit. Prepend, never clobber.
+export C_INCLUDE_PATH="$GDALINC${C_INCLUDE_PATH:+:$C_INCLUDE_PATH}"
+note "gdal headers : $GDALINC  (exported as C_INCLUDE_PATH)"
+note "hdf5 headers : $HDF5INC"
+note "hdf5 library : $HDF5LIB"
 # ---------------------------------------------------------------- clone / pull
 mkdir -p "$GITROOT"
 note "repository root: $GITROOT"
@@ -175,10 +220,13 @@ fi
 # Makefile expects it, so pass all three explicitly.
 mkdir -p "$BINDIR"
 note "building geomosaic (-j$JOBS) into $BINDIR"
+makeArgs=()
+[ -n "$HDF5INC" ] && makeArgs+=("HDF5INCLUDE=$HDF5INC")
+[ -n "$HDF5LIB" ] && makeArgs+=("HDF5LIB=$HDF5LIB")
 make -C "$GITROOT/mosaicSource" -j"$JOBS" geomosaic \
      ROOTDIR="$(dirname "$GITROOT")" \
      PROGDIR="$GITROOT" \
-     BINDIR="$BINDIR"
+     BINDIR="$BINDIR" "${makeArgs[@]}"
 
 [ -x "$BINDIR/geomosaic" ] || die "build finished but $BINDIR/geomosaic is not there"
 
@@ -209,7 +257,6 @@ fi
 
 echo
 echo "geomosaic installed: $BINDIR/geomosaic"
-"$BINDIR/geomosaic" 2>&1 | head -1 || true
 echo
 echo "Add to PATH if needed:   export PATH=\"$BINDIR:\$PATH\""
 echo "Always set for runs:     export OPENBLAS_NUM_THREADS=1"
