@@ -51,11 +51,11 @@ def main():
     stage = f'{args.out}/stage'
     os.makedirs(stage, exist_ok=True)
     if args.sources:
-        inputs, res = args.sources, args.res
+        inputs, res = [os.path.abspath(s) for s in args.sources], args.res
     else:
         if args.work is None:
             ap.error('give a run directory or --sources')
-        vrtDir = f'{args.work}/vrt/{args.product}'
+        vrtDir = os.path.abspath(f"{args.work}/vrt/{args.product}")
         ds = gdal.Open(f'{vrtDir}/global.vrt')
         res = abs(ds.GetGeoTransform()[5])
         ds = None
