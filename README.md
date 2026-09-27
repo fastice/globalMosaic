@@ -22,9 +22,9 @@ them and the resolved settings are saved to `<work>/run.yaml`.
 
 ```bash
 test/setup.sh            # pip install, build geomosaic, check ~/.netrc
-test/runSmoke.sh         # test/smoke.yaml: 2 tiles, ~10 min
-test/runFull.sh          # test/full.yaml: 930 jobs, 24 processes, background, log run_c030.log
-test/makeGoogleEarth.sh  # KML superoverlay of run_c030
+test/runSmoke.sh         # test/smoke.yaml -> runs/smoke: 2 tiles + Google Earth, ~10 min
+test/runFull.sh          # test/full.yaml -> runs/cycle30both: 930 jobs, 24 procs, then Google Earth (background)
+test/makeGoogleEarth.sh  # redo the Google Earth tiles (other stretch/zoom)
 ```
 
 ## Pixel convention

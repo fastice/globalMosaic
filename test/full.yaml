@@ -1,7 +1,7 @@
 # Full cycle-30 global run: 930 jobs, both directions (paths relative to the repo root).
 # Resumable: a rerun skips finished jobs. Command-line options override these values.
 tileRun: cycle30/both          # cycle30/ascending or cycle30/descending for one direction
-work: run_c030
+work: runs/cycle30both        # run directory: tiles, VRTs, googleEarth/, log
 granules: vsicurl              # vsicurl (ASF, ~/.netrc) | local DIR | template with {name}/{url}
 nProc: 24                      # single-threaded jobs, mostly waiting on downloads
 res: 0.000833333333333         # latitude spacing, deg (3 arcsec)
