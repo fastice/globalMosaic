@@ -260,11 +260,13 @@ class Progress:
             self.failed += 1
             self.failedTiles.add(name)
 
-    def draw(self):
+    def draw(self, stem='progress'):
         el = time.time() - self.t0
-        eta = el / self.done * (self.total - self.done) if self.done else float('nan')
+        rateN = getattr(self, 'etaDone', self.done)
+        eta = el / rateN * (self.total - self.done) if rateN else float('nan')
         text = (f'{time.strftime("%m-%d %H:%M:%S")}  jobs done {self.done} of {self.total} '
-                f'({self.failed} failed); elapsed {el / 3600:.2f} h; ETA {eta / 3600:.2f} h')
+                f'({self.failed} failed); elapsed {el / 3600:.2f} h; ETA '
+                + (f'{eta / 3600:.2f} h' if eta == eta else 'n/a'))
         rgb, alpha = self.globalRGBA()
         # mid latitudes 60S..60N in lat/lon; poleward of 60 in polar stereographic
         i60 = int(round(30 / self.RES))
@@ -294,9 +296,9 @@ class Progress:
             ax.set_xticks([]), ax.set_yticks([])
         fig.suptitle(f'{text}\nfinished tiles grey, planned blue, failed red', fontsize=13)
         fig.tight_layout()
-        fig.savefig(f'{self.dir}/progress.png', dpi=100)
+        fig.savefig(f'{self.dir}/{stem}.png', dpi=100)
         plt.close(fig)
-        with open(f'{self.dir}/progress.txt', 'w') as fp:
+        with open(f'{self.dir}/{stem}.txt', 'w') as fp:
             fp.write(text + '\n')
 
     def globalRGBA(self):
