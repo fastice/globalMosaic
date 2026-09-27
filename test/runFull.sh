@@ -6,7 +6,7 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 export PATH=$HOME/bin/$(uname -m):$PATH
-CONFIG=${CONFIG:-test/full.yaml}
+CONFIG=${CONFIG:-test/fullAsc.yaml}
 # the run yaml can also be given first:  bash test/runFull.sh test/fullDesc.yaml
 if [[ "${1:-}" == *.yaml ]]; then CONFIG=$1; shift; fi
 WORK=$(python3 -c "import yaml; print(yaml.safe_load(open('$CONFIG'))['work'])")

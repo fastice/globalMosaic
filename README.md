@@ -23,8 +23,8 @@ them and the resolved settings are saved to `<work>/run.yaml`.
 
 ```bash
 test/setup.sh            # pip install, build geomosaic, check ~/.netrc
-test/runSmoke.sh [test/smokeAsc.yaml]   # default test/smoke.yaml (both directions); work: says where: 2 tiles + Google Earth, ~10 min
-test/runFull.sh [test/fullDesc.yaml]    # default test/full.yaml (both directions): 930 jobs, 24 procs, then Google Earth (background)
+test/runSmoke.sh [test/smokeAsc.yaml]   # default test/smokeAsc.yaml (ascending); test/smoke.yaml = both; work: says where: 2 tiles + Google Earth, ~10 min
+test/runFull.sh [test/fullDesc.yaml]    # default test/fullAsc.yaml (ascending); test/full.yaml = both: 930 jobs, 24 procs, then Google Earth (background)
 test/makeGoogleEarth.sh  # redo the Google Earth tiles (other stretch/zoom)
 ```
 
