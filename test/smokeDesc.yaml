@@ -1,0 +1,11 @@
+# Smoke test, descending only: two 6x6 deg tiles tested on petermann (paths relative to the repo root).
+# N42W012 = frequency A HH (Iberia, 6 granules); N24E006 = frequency A HH + B VV (Sahara).
+tileRun: cycle30/descending     # descending passes only
+work: /scratch/ianj/mosaics/smokeDesc        # run directory (absolute, or relative to the repo): tiles, VRTs, googleEarth/, run.log
+granules: s3                   # s3 = direct S3 reads (AWS us-west-2 only) | vsicurl (anywhere) | local DIR
+tiles: [N42W012_6x6, N24E006_6x6]
+nProc: 24                      # concurrent single-threaded geomosaic jobs
+res: 0.000833333333333         # latitude spacing, deg (3 arcsec)
+calOutput: gamma0              # gamma0 | sigma0 | both
+featherKm: 10
+retries: 2                     # re-run a job that dies on a network error
