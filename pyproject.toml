@@ -22,7 +22,8 @@ dependencies = [
     "cartopy",
     "matplotlib",
     "asf_search",
-    "GDAL"
+    "GDAL",
+    "PyYAML"
 ]
 
 [tool.setuptools]

@@ -15,6 +15,18 @@ is wrong for about 4% of granules). Needs a geomosaic with geographic output and
 `cycle30/` holds the cycle-030 tile descriptions: `catalogue.geojson` (the ASF search) and the
 tilings for `both` directions, `ascending` and `descending` (`--allowV --exclude5MHzOcean`).
 
+## Running (test/)
+
+Run files are yamls whose keys are `runGeomosaicTiles` option names; the command line overrides
+them and the resolved settings are saved to `<work>/run.yaml`.
+
+```bash
+test/setup.sh            # pip install, build geomosaic, check ~/.netrc
+test/runSmoke.sh         # test/smoke.yaml: 2 tiles, ~10 min
+test/runFull.sh          # test/full.yaml: 930 jobs, 24 processes, background, log run_c030.log
+test/makeGoogleEarth.sh  # KML superoverlay of run_c030
+```
+
 ## Pixel convention
 
 GrIMP C programs (geomosaic included) work in **pixel-centre** coordinates: the input-file header

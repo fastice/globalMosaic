@@ -4,6 +4,12 @@ Run geomosaic over the lat/lon tiles made by globalGCOVTiles.py and assemble a V
 Standalone: the only program it calls is geomosaic; GDAL's Python API crops and builds VRTs.
 
   runGeomosaicTiles cycle30/both --work run_c030 --granules vsicurl --nProc 48 [--dryRun]
+  runGeomosaicTiles --config run.yaml [--nProc 24 ...]
+
+Run file (--config)
+  A yaml whose keys are the option names below (tileRun, work, granules, nProc, date1, tiles,
+  excludeTiles, ...). Options given on the command line override it. The resolved settings are
+  written to <work>/run.yaml, as the record of what the run used.
 
 Jobs
   One geomosaic run per tile and per frequency/polarization group (tiles/<tile>.<F><PP>.yaml from
@@ -51,6 +57,7 @@ import subprocess
 import sys
 import time
 
+import yaml
 from osgeo import gdal
 
 gdal.UseExceptions()
@@ -173,11 +180,34 @@ def cropToTile(src, dst, grid):
                    creationOptions=['TILED=YES', 'COMPRESS=DEFLATE', 'PREDICTOR=2', 'BIGTIFF=IF_SAFER'])
 
 
+def parseWithConfig(ap):
+    '''
+    Parse the command line over the --config yaml: yaml keys become defaults (unknown keys are an
+    error), so anything given on the command line wins. tileRun, work and granules are required
+    from one or the other.
+    '''
+    pre, _ = ap.parse_known_args()
+    if pre.config:
+        with open(pre.config) as fp:
+            cfg = yaml.safe_load(fp) or {}
+        known = {a.dest for a in ap._actions}
+        bad = sorted(set(cfg) - known)
+        if bad:
+            ap.error(f'{pre.config}: unknown keys {bad}')
+        ap.set_defaults(**cfg)
+    args = ap.parse_args()
+    missing = [k for k in ('tileRun', 'work', 'granules') if getattr(args, k) is None]
+    if missing:
+        ap.error(f'missing {missing} (command line or --config)')
+    return args
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument('tileRun', help='output directory of globalGCOVTiles.py')
-    ap.add_argument('--work', required=True, help='work/output directory')
-    ap.add_argument('--granules', required=True, help='vsicurl | DIR | TEMPLATE with {name}/{url}')
+    ap.add_argument('tileRun', nargs='?', default=None, help='output directory of globalGCOVTiles.py')
+    ap.add_argument('--config', default=None, help='run yaml (keys = option names); command line overrides')
+    ap.add_argument('--work', default=None, help='work/output directory')
+    ap.add_argument('--granules', default=None, help='vsicurl | DIR | TEMPLATE with {name}/{url}')
     ap.add_argument('--factorFrom', default=None, help='shared RTC factor directory (slim granules)')
     ap.add_argument('--res', type=float, default=3. / 3600, help='latitude spacing, deg [3 arcsec]')
     ap.add_argument('--psResM', type=float, default=100., help='polar cap tile spacing, m [100]')
@@ -189,17 +219,22 @@ def main():
     ap.add_argument('--date2', default=None, help='MM-DD-YYYY (geomosaic -date2)')
     ap.add_argument('--nProc', type=int, default=16, help='concurrent single-threaded jobs [16]')
     ap.add_argument('--tiles', nargs='+', default=None, help='only these tile names')
+    ap.add_argument('--excludeTiles', nargs='+', default=None, help='skip these tile names')
     ap.add_argument('--geomosaic', default='geomosaic', help='geomosaic executable [on PATH]')
     ap.add_argument('--retries', type=int, default=2,
                     help='re-run a job that died on a remote/network error [2]')
     ap.add_argument('--dryRun', action='store_true', help='write job dirs, print commands, run nothing')
-    args = ap.parse_args()
+    args = parseWithConfig(ap)
 
     os.makedirs(args.work, exist_ok=True)
+    with open(f'{args.work}/run.yaml', 'w') as fp:
+        yaml.safe_dump({k: v for k, v in vars(args).items() if k != 'config'}, fp, sort_keys=False)
     summary = open(f'{args.work}/summary.log', 'a')
     feats = json.load(open(f'{args.tileRun}/tiles.geojson'))['features']
     if args.tiles:
         feats = [f for f in feats if f['properties']['name'] in args.tiles]
+    if args.excludeTiles:
+        feats = [f for f in feats if f['properties']['name'] not in args.excludeTiles]
     import csv
     jobs, grids, bands, caps = [], {}, {}, []
     for f in feats:

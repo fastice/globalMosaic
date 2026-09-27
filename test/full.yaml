@@ -1,0 +1,13 @@
+# Full cycle-30 global run: 930 jobs, both directions (paths relative to the repo root).
+# Resumable: a rerun skips finished jobs. Command-line options override these values.
+tileRun: cycle30/both          # cycle30/ascending or cycle30/descending for one direction
+work: run_c030
+granules: vsicurl              # vsicurl (ASF, ~/.netrc) | local DIR | template with {name}/{url}
+nProc: 24                      # single-threaded jobs, mostly waiting on downloads
+res: 0.000833333333333         # latitude spacing, deg (3 arcsec)
+psResM: 100                    # south polar cap (S84PS3031) spacing, m
+calOutput: gamma0
+featherKm: 10
+retries: 2
+# The south cap is one ~13 h single-threaded job (52 granules); uncomment to leave it out.
+# excludeTiles: [S84PS3031]
