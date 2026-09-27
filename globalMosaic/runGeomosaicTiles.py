@@ -50,7 +50,8 @@ Outputs (--work DIR)
   vrt/<product>/cap_<name>.vrt   polar cap tiles (EPSG 3031/3413, own CRS, not in global.vrt)
   products: gamma0 by default (-calOutput gamma0); --calOutput both adds sigma0
   quicklooks/progress.png, progress.txt   updated while the run goes (--progressMinutes): tiles
-                 done so far in grey over the planned tiles in blue (failed tiles red), and
+                 done so far in grey over the planned tiles in blue (failed tiles red): mid
+                 latitudes in lat/lon, poleward of 60N/60S in polar stereographic; and
                  counts / elapsed / ETA;
                  quicklooks/progress/<tile>.<grp>.tif are the per-job low-res pieces
 Polar caps
@@ -228,8 +229,9 @@ def cropToTile(src, dst, grid):
 
 class Progress:
     '''
-    Low-resolution picture of a run while it goes: quicklooks/progress.png (lat/lon tiles done so
-    far, in grey, over the planned tiles in blue; polar caps in quicklooks/progress_<cap>.png) and
+    Low-resolution picture of a run while it goes: quicklooks/progress.png -- tiles done so far in
+    grey over the planned tiles in blue (failed red): 60S-60N in lat/lon, and polar stereographic
+    views poleward of 60N (EPSG 3413) and 60S (EPSG 3031, with the polar cap) -- and
     quicklooks/progress.txt (jobs done / failed / total, elapsed, ETA).
     '''
     RES, CAPRES = 0.1, 5000.       # progress image spacing: deg for lat/lon tiles, m for caps
@@ -240,9 +242,6 @@ class Progress:
         os.makedirs(f'{self.dir}/progress', exist_ok=True)
         self.planned = {j[0]: (grids[j[2]]['tile'], grids[j[2]]['epsg']) for j in jobs}
         self.failedTiles = set()
-        latlon = [t for t, e in self.planned.values() if e == 4326]
-        self.s = min((t[1] for t in latlon), default=-90.)
-        self.n = max((t[3] for t in latlon), default=90.)
 
     def addJob(self, name, grp, tif):
         out = f'{self.dir}/progress/{name}.{grp}.tif'
@@ -262,38 +261,114 @@ class Progress:
             self.failedTiles.add(name)
 
     def draw(self):
+        el = time.time() - self.t0
+        eta = el / self.done * (self.total - self.done) if self.done else float('nan')
+        text = (f'{time.strftime("%m-%d %H:%M:%S")}  jobs done {self.done} of {self.total} '
+                f'({self.failed} failed); elapsed {el / 3600:.2f} h; ETA {eta / 3600:.2f} h')
+        rgb, alpha = self.globalRGBA()
+        # mid latitudes 60S..60N in lat/lon; poleward of 60 in polar stereographic
+        i60 = int(round(30 / self.RES))
+        panels = [('60S - 60N', rgb[i60:-i60], alpha[i60:-i60], (-180, 180, -60, 60), None, 0),
+                  ('north of 60N (EPSG 3413)',) + self.polar(rgb, alpha, 3413, 1) + (3413, 1),
+                  ('south of 60S (EPSG 3031)',) + self.polar(rgb, alpha, 3031, -1) + (3031, -1)]
+        coasts = coastlines()
+        import matplotlib
+        matplotlib.use('Agg')
+        import matplotlib.pyplot as plt
+        fig = plt.figure(figsize=(18, 15))
+        grid = fig.add_gridspec(2, 2, height_ratios=[1, 1.4])
+        for k, (title, c, a, extent, epsg, sign) in enumerate(panels):
+            ax = fig.add_subplot(grid[0, :] if k == 0 else grid[1, k - 1])
+            ax.imshow(np.dstack([c, a]), extent=extent, interpolation='nearest')
+            for lon, lat in coasts:
+                if epsg is None:
+                    ax.plot(lon, lat, color='#333', linewidth=0.4)
+                elif (sign * lat >= 60).any():
+                    import pyproj
+                    x, y = pyproj.Transformer.from_crs(4326, epsg, always_xy=True).transform(lon, lat)
+                    x, y = x / 1000., y / 1000.
+                    x[sign * lat < 60] = np.nan
+                    ax.plot(x, y, color='#333', linewidth=0.4)
+            ax.set_xlim(extent[:2]), ax.set_ylim(extent[2:])
+            ax.set_title(title)
+            ax.set_xticks([]), ax.set_yticks([])
+        fig.suptitle(f'{text}\nfinished tiles grey, planned blue, failed red', fontsize=13)
+        fig.tight_layout()
+        fig.savefig(f'{self.dir}/progress.png', dpi=100)
+        plt.close(fig)
+        with open(f'{self.dir}/progress.txt', 'w') as fp:
+            fp.write(text + '\n')
+
+    def globalRGBA(self):
+        ''' Whole globe at RES deg: planned lat/lon tiles pale blue (failed red), finished data grey. '''
         from .makeQuickLook import stretch
-        nx, ny = int(round(360 / self.RES)), int(round((self.n - self.s) / self.RES))
+        nx, ny = int(round(360 / self.RES)), int(round(180 / self.RES))
         rgb = np.zeros((ny, nx, 3), np.uint8)
         alpha = np.zeros((ny, nx), np.uint8)
-        for name, ((w, s, e, n), epsg) in self.planned.items():   # planned: pale blue, failed: red
+        for name, ((w, s, e, n), epsg) in self.planned.items():
             if epsg != 4326:
                 continue
             j0, j1 = int(round((w + 180) / self.RES)), int(round((e + 180) / self.RES))
-            i0, i1 = int(round((self.n - n) / self.RES)), int(round((self.n - s) / self.RES))
+            i0, i1 = int(round((90 - n) / self.RES)), int(round((90 - s) / self.RES))
             rgb[i0:i1, j0:j1] = (220, 40, 40) if name in self.failedTiles else (170, 200, 235)
             alpha[i0:i1, j0:j1] = 255
         if self.pieces:
-            vrt = gdal.BuildVRT('', self.pieces, outputBounds=(-180, self.s, 180, self.n),
+            vrt = gdal.BuildVRT('', self.pieces, outputBounds=(-180, -90, 180, 90),
                                 resolution='user', xRes=self.RES, yRes=self.RES,
                                 srcNodata=NODATA, VRTNodata=NODATA)
             a = vrt.GetRasterBand(1).ReadAsArray(buf_xsize=nx, buf_ysize=ny)
-            g = stretch(a)
             have = a != NODATA
-            rgb[have] = g[have][:, None]
+            rgb[have] = stretch(a)[have][:, None]
             alpha[have] = 255
-        writeRGBA(rgb, alpha, f'{self.dir}/progress.png')
-        for cap, pieces in self.caps.items():
-            vrt = gdal.BuildVRT('', pieces, srcNodata=NODATA, VRTNodata=NODATA)
-            a = vrt.GetRasterBand(1).ReadAsArray()
-            g = stretch(a)
-            writeRGBA(np.repeat(g[..., None], 3, 2), np.where(a != NODATA, 255, 0).astype(np.uint8),
-                      f'{self.dir}/progress_{cap}.png')
-        el = time.time() - self.t0
-        eta = el / self.done * (self.total - self.done) if self.done else float('nan')
-        with open(f'{self.dir}/progress.txt', 'w') as fp:
-            fp.write(f'{time.strftime("%m-%d %H:%M:%S")}  jobs done {self.done} of {self.total} '
-                     f'({self.failed} failed); elapsed {el / 3600:.2f} h; ETA {eta / 3600:.2f} h\n')
+        return rgb, alpha
+
+    def polar(self, rgb, alpha, epsg, sign, res=10000.):
+        ''' Polar stereographic view poleward of 60 deg: the lat/lon picture resampled, with the
+        polar cap tile (planned blue / failed red / data) drawn in its own CRS. '''
+        import pyproj
+        from .makeQuickLook import stretch
+        toLL = pyproj.Transformer.from_crs(epsg, 4326, always_xy=True)
+        fromLL = pyproj.Transformer.from_crs(4326, epsg, always_xy=True)
+        r = float(np.hypot(*fromLL.transform(0., sign * 60.)))
+        n = int(np.ceil(2 * r / res))
+        xc = -r + (np.arange(n) + 0.5) * res
+        x, y = np.meshgrid(xc, xc[::-1])
+        lon, lat = toLL.transform(x, y)
+        j = np.clip(((lon + 180) / self.RES).astype(int), 0, rgb.shape[1] - 1)
+        i = np.clip(((90 - lat) / self.RES).astype(int), 0, rgb.shape[0] - 1)
+        c, a = rgb[i, j].copy(), alpha[i, j].copy()
+        for name, (tile, e) in self.planned.items():
+            if e != epsg:
+                continue
+            x0, y0, x1, y1 = tile
+            inCap = (x >= x0) & (x <= x1) & (y >= y0) & (y <= y1)
+            c[inCap] = (220, 40, 40) if name in self.failedTiles else (170, 200, 235)
+            a[inCap] = 255
+            if name in self.caps:
+                vrt = gdal.BuildVRT('', self.caps[name], srcNodata=NODATA, VRTNodata=NODATA)
+                w = gdal.Warp('', vrt, format='MEM', outputBounds=(-r, -r, r, r), xRes=res, yRes=res,
+                              resampleAlg='average', srcNodata=NODATA, dstNodata=NODATA)
+                d = w.GetRasterBand(1).ReadAsArray()
+                have = d != NODATA
+                c[have] = stretch(d)[have][:, None]
+                a[have] = 255
+        a[sign * lat < 60] = 0
+        return c, a, (-r / 1000, r / 1000, -r / 1000, r / 1000)
+
+
+def coastlines():
+    ''' Natural Earth 110 m coastlines as (lon, lat) arrays (cartopy's cached copy); none if
+    cartopy or the data are unavailable -- the progress picture is still drawn. '''
+    try:
+        import cartopy.feature as cf
+        lines = []
+        for g in cf.COASTLINE.with_scale('110m').geometries():
+            for part in getattr(g, 'geoms', [g]):
+                xy = np.asarray(part.coords)
+                lines.append((xy[:, 0], xy[:, 1]))
+        return lines
+    except Exception:
+        return []
 
 
 def writeRGBA(rgb, alpha, png):
