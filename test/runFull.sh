@@ -18,6 +18,8 @@ nohup bash -c '
     makeQuickLook "$1" --processes ${NPROC:-24}
     echo "=== quick looks in $1/quicklooks; Google Earth tiles"
     makeGoogleEarth "$1" --out "$1/googleEarth" --processes ${NPROC:-24} --zoom ${ZOOM:-0-9}
-    echo "=== all done $(date): open $1/googleEarth/doc.kml"
+    # one file to copy off the machine: PNGs are already compressed, so a plain tar
+    tar -cf "$1/googleEarth.tar" -C "$1" --exclude=googleEarth/stage googleEarth
+    echo "=== all done $(date): open $1/googleEarth/doc.kml; archive $1/googleEarth.tar"
 ' "$CONFIG" "$WORK" "$@" > $WORK/run.log 2>&1 &
 echo "started pid $!; log: $(realpath $WORK/run.log)"

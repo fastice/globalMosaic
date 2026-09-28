@@ -45,6 +45,7 @@ Outputs (--out DIR)
 '''
 import argparse
 import csv
+import glob
 import json
 import math
 import os
@@ -192,7 +193,7 @@ def tilesFor(bands, bbox):
                 yield name, box(lon, s, lon + w, n), dict(lonMult=mult, height=h, width=w)
 
 
-def selectForTile(tileBox, cands, marginKm, cellDeg, minNewFrac):
+def selectForTile(tileBox, cands, marginKm, cellDeg, minNewFrac, forced=()):
     ''' Greedy tiered set cover on a raster of the padded tile. Returns (picks, coverage). '''
     lat = tileBox.centroid.y
     dLat = marginKm / 111.32
@@ -211,10 +212,10 @@ def selectForTile(tileBox, cands, marginKm, cellDeg, minNewFrac):
                                all_touched=True).astype(bool)
         if m.any():
             masks.append((g, m))
-    return greedyCover(masks, (ny, nx), minNewFrac)
+    return greedyCover(masks, (ny, nx), minNewFrac, forced)
 
 
-def greedyCover(masks, shape2d, minNewFrac):
+def greedyCover(masks, shape2d, minNewFrac, forced=()):
     ''' Tiered greedy set cover over rasterised footprints [(granule, bool mask)]. Tiers: the main
     catalogue (fill 0) through all bandwidths first, then each fill catalogue (--fillCatalogues)
     in turn, which therefore only covers what the main cycle leaves open. '''
@@ -224,6 +225,15 @@ def greedyCover(masks, shape2d, minNewFrac):
         union |= m
     covered = np.zeros((ny, nx), bool)
     picks = []
+    # granules the tile must keep (--keepFrom), in their original order, before anything is added
+    maskOf = {g['name']: m for g, m in masks}
+    for g in forced:
+        m = maskOf.get(g['name'])
+        picks.append((g, int((m & ~covered).sum()) if m is not None else 0))
+        if m is not None:
+            covered |= m
+    kept = {g['name'] for g in forced}
+    masks = [(g, m) for g, m in masks if g['name'] not in kept]
     minNew = max(int(minNewFrac * nx * ny), 1)
     for fill, bw in sorted({(g.get('fill', 0), -g['bw']) for g, _ in masks}):
         tier = sorted([(g, m) for g, m in masks if g.get('fill', 0) == fill and g['bw'] == -bw],
@@ -261,7 +271,7 @@ def writeTile(outDir, name, picks, used):
                 fp.write(f'  - {g["name"]}.h5\n')
 
 
-def selectForCap(sign, epsg, cands, marginKm, cellM, minNewFrac):
+def selectForCap(sign, epsg, cands, marginKm, cellM, minNewFrac, forced=()):
     ''' Greedy cover of the polar cap (|lat| > CAP_LAT) on a polar stereographic raster, from the
     footprints' own corners (no lat/lon distortion near the pole). '''
     import pyproj
@@ -279,7 +289,7 @@ def selectForCap(sign, epsg, cands, marginKm, cellM, minNewFrac):
                                all_touched=True).astype(bool)
         if m.any():
             masks.append((g, m))
-    return greedyCover(masks, (n, n), minNewFrac), half - marginKm * 1000.
+    return greedyCover(masks, (n, n), minNewFrac, forced), half - marginKm * 1000.
 
 
 def main():
@@ -308,6 +318,9 @@ def main():
                     help='use the V channel of granules that have no H channel (e.g. 5 MHz SV-only '
                     'modes over land); the channel used is in each tile CSV')
     ap.add_argument('--noMixed', action='store_true', help='drop mixed-mode (_M_) granules')
+    ap.add_argument('--keepFrom', default=None,
+                    help='an earlier tiling: every tile keeps exactly its granules and only gains '
+                    'granules where cells are still uncovered, so a rerun redoes just the tiles with gaps')
     ap.add_argument('--fillCatalogues', nargs='+', default=[],
                     help='catalogues of other cycles (e.g. cycle30/catalogue029.geojson), used in the '
                     'order given, only where the main catalogue leaves a tile uncovered')
@@ -325,6 +338,11 @@ def main():
     for k, fc in enumerate(args.fillCatalogues, 1):
         grans += loadGranules(fc, args.allowV, fill=k)
     nAll = len(grans)
+    byName = {g['name']: g for g in grans}          # before any filtering: kept picks stay usable
+    keepTiles = {}
+    if args.keepFrom:
+        for path in glob.glob(f'{args.keepFrom}/tiles/*.csv'):
+            keepTiles[os.path.basename(path)[:-4]] = list(csv.DictReader(open(path)))
     dropped = Counter()
     if args.direction != 'both':
         dropped['direction'] = sum(g['direction'] != args.direction for g in grans)
@@ -342,6 +360,8 @@ def main():
             if v is not None:
                 if v['geometry'] is None or v['properties']['validFrac'] < args.minValid:
                     dropped['no valid data (mask)'] += 1
+                    # a tile that keeps it (--keepFrom) must see it as covering nothing
+                    g.pop('geom', None), g.pop('raw', None)
                     continue
                 g['geom'] = unwrap(shape(v['geometry']).buffer(0))
                 g['raw'] = v['geometry']
@@ -365,13 +385,27 @@ def main():
 
     feats, stats = [], Counter()
     used = set()
+    def forcedFor(name, cands):
+        ''' The earlier tiling's picks for this tile (--keepFrom), as granules, in order. '''
+        have = {g['name']: g for g in cands}
+        out = []
+        for r in keepTiles.get(name, []):
+            g = have.get(r['name']) or byName.get(r['name'])
+            if g is None:           # not usable any more (e.g. no valid data): keep it as listed
+                g = dict(name=r['name'], url=r['url'], freq=r['freq'], pol=r['pol'], bw=int(r['bwMHz']),
+                         direction=r['direction'], mixed=bool(int(r['mixed'])))
+            out.append(g)
+        return out
+
     for name, tbox, band in tilesFor(bands, args.bbox):
         idx = tree.query(tbox, predicate='intersects')
-        if len(idx) == 0:
+        if len(idx) == 0 and name not in keepTiles:
             continue                    # no frames: no tile
         cands = [grans[i] for i in idx]
+        forced = forcedFor(name, cands)
+        cands += [g for g in forced if g not in cands and 'geom' in g]
         picks, coverage, unionCells, nCells = selectForTile(tbox, cands, args.marginKm,
-                                                            args.cellDeg, args.minNewFrac)
+                                                            args.cellDeg, args.minNewFrac, forced)
         if not picks:
             continue
         stats['tiles'] += 1
@@ -391,8 +425,10 @@ def main():
         if len(idx) == 0:
             continue
         cands = [grans[i] for i in idx]
+        forced = forcedFor(name, cands)
+        cands += [g for g in forced if g not in cands and 'geom' in g]
         (picks, coverage, unionCells, nCells), halfM = selectForCap(
-            sign, epsg, cands, args.marginKm, 2000., args.minNewFrac)
+            sign, epsg, cands, args.marginKm, 2000., args.minNewFrac, forced)
         if not picks:
             continue
         writeTile(args.out, name, picks, used)

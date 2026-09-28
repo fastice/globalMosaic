@@ -7,3 +7,5 @@ CONFIG=test/fullAsc.yaml
 if [[ "${1:-}" == *.yaml ]]; then CONFIG=$1; shift; fi
 WORK=${WORK:-$(python3 -c "import yaml; print(yaml.safe_load(open('$CONFIG'))['work'])")}
 time makeGoogleEarth $WORK --out $WORK/googleEarth --processes ${NPROC:-24} --zoom ${ZOOM:-0-9} "$@"
+tar -cf $WORK/googleEarth.tar -C $WORK --exclude=googleEarth/stage googleEarth
+echo "archive $WORK/googleEarth.tar"
