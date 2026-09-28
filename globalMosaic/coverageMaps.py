@@ -20,6 +20,7 @@ import cartopy.feature as cf
 import matplotlib.pyplot as plt
 from matplotlib.patches import Patch
 from shapely.geometry import box, shape
+from shapely.validation import make_valid
 from shapely.ops import unary_union
 
 from globalMosaic import globalGCOVTiles as gtiles
@@ -76,7 +77,7 @@ def main():
         clip = box(-180, s0, 180, n0)
         if epsg:
             fwd = pyproj.Transformer.from_crs(4326, epsg, always_xy=True).transform
-            toGeom = lambda g: transform(fwd, shape(g)).buffer(0)       # corners projected directly
+            toGeom = lambda g: make_valid(transform(fwd, shape(g)))     # corners projected directly
             # a latitude band is a disk or annulus about the pole in a polar projection
             from shapely.geometry import Point
             radius = lambda lat: math.hypot(*fwd(0., lat))
@@ -89,7 +90,7 @@ def main():
             landR = landR.intersection(clipR)
             eps, areaOf = 2000., (lambda g: g.area / 1e6)
         else:
-            toGeom = lambda g: gtiles.unwrap(shape(g).buffer(0))
+            toGeom = lambda g: gtiles.unwrapValid(shape(g))
             landR, clipR = land.intersection(clip), clip
             eps, areaOf = 0.02, (lambda g: transform(eqArea, g).area / 1e6)
         tiers = {}

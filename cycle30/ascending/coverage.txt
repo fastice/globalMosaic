@@ -1,4 +1,4 @@
-5721 granules selected; land (to 77.5N, incl. Antarctic ice shelves) 147.8 M km2; uncovered land 3.65 M km2 (2.5%)
-  Antarctic (<60S)   uncovered   0.29 of   13.9 M km2 (2.1%)
-  mid-latitude       uncovered   3.29 of  117.5 M km2 (2.8%)
-  Arctic (>60N)      uncovered   0.07 of   16.4 M km2 (0.4%)
+6028 granules selected; land (to 77.5N, incl. Antarctic ice shelves) 147.8 M km2; uncovered land 1.06 M km2 (0.7%)
+  Antarctic (<60S)   uncovered   0.28 of   13.9 M km2 (2.0%)
+  mid-latitude       uncovered   0.75 of  117.5 M km2 (0.6%)
+  Arctic (>60N)      uncovered   0.03 of   16.4 M km2 (0.2%)

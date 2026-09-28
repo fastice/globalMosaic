@@ -124,6 +124,28 @@ def unwrap(geom):
     return unary_union([west, east])
 
 
+def unwrapValid(geom):
+    ''' unwrap() for any (multi)polygon with holes, e.g. a scanMasks valid-data footprint: parts
+    spanning the antimeridian are shifted to 0..360, repaired, split at 180 and shifted back. '''
+    from shapely.affinity import translate
+    from shapely.geometry import Polygon
+    from shapely.validation import make_valid
+
+    def polys(g):
+        return [q for q in getattr(g, 'geoms', [g]) if q.geom_type == 'Polygon' and not q.is_empty]
+    parts = []
+    for poly in polys(geom):
+        xs = [x for x, _ in poly.exterior.coords]
+        if max(xs) - min(xs) <= 180:
+            parts += polys(make_valid(poly))
+            continue
+        sh = lambda c: [(x + 360 if x < 0 else x, y) for x, y in c]
+        whole = make_valid(Polygon(sh(poly.exterior.coords), [sh(i.coords) for i in poly.interiors]))
+        parts += polys(whole.intersection(box(0, -90, 180, 90)))
+        parts += polys(translate(whole.intersection(box(180, -90, 540, 90)), xoff=-360))
+    return unary_union(parts)
+
+
 def searchCatalogue(cycle, outFile):
     ''' All GCOVs of one cycle (by file name), latest product counter each, with footprints. '''
     import asf_search as asf
@@ -363,7 +385,7 @@ def main():
                     # a tile that keeps it (--keepFrom) must see it as covering nothing
                     g.pop('geom', None), g.pop('raw', None)
                     continue
-                g['geom'] = unwrap(shape(v['geometry']).buffer(0))
+                g['geom'] = unwrapValid(shape(v['geometry']))
                 g['raw'] = v['geometry']
             keep.append(g)
         grans = keep
