@@ -439,6 +439,9 @@ def main():
     ap.add_argument('--geomosaic', default='geomosaic', help='geomosaic executable [on PATH]')
     ap.add_argument('--retries', type=int, default=2,
                     help='re-run a job that died on a remote/network error [2]')
+    ap.add_argument('--zoom', default=None,
+                    help='Google Earth zoom levels for test/runFull.sh (e.g. 0-11); not used here, '
+                    'accepted so a run yaml can carry it')
     ap.add_argument('--progressMinutes', type=float, default=5.,
                     help='refresh quicklooks/progress.png and progress.txt this often [5]')
     ap.add_argument('--dryRun', action='store_true', help='write job dirs, print commands, run nothing')

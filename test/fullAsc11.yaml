@@ -1,0 +1,15 @@
+# Full cycle-30 ascending run at the resolution of Google Earth zoom level 11 (paths relative to the
+# repo root). Level 11 pixels are 360 / (256 * 2**11) deg = 2.47"; 2.4" is the nearest spacing that
+# divides the 6-deg tiles exactly (9000 px), so gdal2tiles only averages down slightly.
+# Same tiling and reads as fullAsc.yaml: run time is about the same (the cap sets it), memory per
+# job ~1.6x, disk ~1.6x, Google Earth at zoom 0-11 ~30 GB.
+tileRun: cycle30/ascending
+work: /scratch/ianj/mosaics/cycle30ascending_z11   # run directory: tiles, VRTs, googleEarth/, run.log
+granules: vsicurl
+nProc: 24
+res: 0.000666666666667         # latitude spacing, deg (2.4 arcsec)
+psResM: 75                     # south polar cap spacing, m (level 11 ~ 76 m)
+calOutput: gamma0
+featherKm: 10
+retries: 2
+zoom: 0-11                     # Google Earth levels built by test/runFull.sh

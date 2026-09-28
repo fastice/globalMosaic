@@ -10,6 +10,8 @@ CONFIG=${CONFIG:-test/fullAsc.yaml}
 # the run yaml can also be given first:  bash test/runFull.sh test/fullDesc.yaml
 if [[ "${1:-}" == *.yaml ]]; then CONFIG=$1; shift; fi
 WORK=$(python3 -c "import yaml; print(yaml.safe_load(open('$CONFIG'))['work'])")
+# Google Earth zoom levels: ZOOM, else the yaml's zoom:, else 0-9
+export ZOOM=${ZOOM:-$(python3 -c "import yaml; print(yaml.safe_load(open('$CONFIG')).get('zoom') or '0-9')")}
 mkdir -p $WORK
 nohup bash -c '
     set -e
