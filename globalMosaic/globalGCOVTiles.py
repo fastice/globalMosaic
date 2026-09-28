@@ -212,7 +212,7 @@ def tilesFor(bands, bbox):
                 yield name, box(lon, s, lon + w, n), dict(lonMult=mult, height=h, width=w)
 
 
-def selectForTile(tileBox, cands, marginKm, cellDeg, minNewFrac, forced=()):
+def selectForTile(tileBox, cands, marginKm, cellDeg, minNewFrac, forced=(), target=None):
     ''' Greedy tiered set cover on a raster of the padded tile. Returns (picks, coverage). '''
     lat = tileBox.centroid.y
     dLat = marginKm / 111.32
@@ -231,10 +231,21 @@ def selectForTile(tileBox, cands, marginKm, cellDeg, minNewFrac, forced=()):
                                all_touched=True).astype(bool)
         if m.any():
             masks.append((g, m))
-    return greedyCover(masks, (ny, nx), minNewFrac, forced)
+    return greedyCover(masks, (ny, nx), minNewFrac, forced, rasterTarget(target, (ny, nx), tr))
 
 
-def greedyCover(masks, shape2d, minNewFrac, forced=()):
+def rasterTarget(target, shape2d, tr):
+    ''' --fillGaps: the cells to fill (the tile's no-data areas), or None for a normal selection;
+    an empty geometry means nothing to fill. '''
+    if target is None:
+        return None
+    if target.is_empty:
+        return np.zeros(shape2d, bool)
+    return features.rasterize([(target, 1)], out_shape=shape2d, transform=tr, dtype='uint8',
+                              all_touched=True).astype(bool)
+
+
+def greedyCover(masks, shape2d, minNewFrac, forced=(), target=None):
     ''' Tiered greedy set cover over rasterised footprints [(granule, bool mask)]. Tiers: the main
     catalogue (fill 0) through all bandwidths first, then each fill catalogue (--fillCatalogues)
     in turn, which therefore only covers what the main cycle leaves open. '''
@@ -254,6 +265,10 @@ def greedyCover(masks, shape2d, minNewFrac, forced=()):
     kept = {g['name'] for g in forced}
     masks = [(g, m) for g, m in masks if g['name'] not in kept]
     minNew = max(int(minNewFrac * nx * ny), 1)
+    if target is not None:
+        # --fillGaps: only the tile's actual no-data cells are open; small gaps count too
+        covered = ~target
+        minNew = 4
     for fill, bw in sorted({(g.get('fill', 0), -g['bw']) for g, _ in masks}):
         tier = sorted([(g, m) for g, m in masks if g.get('fill', 0) == fill and g['bw'] == -bw],
                       key=lambda gm: gm[0]['mixed'])
@@ -290,7 +305,7 @@ def writeTile(outDir, name, picks, used):
                 fp.write(f'  - {g["name"]}.h5\n')
 
 
-def selectForCap(sign, epsg, cands, marginKm, cellM, minNewFrac, forced=()):
+def selectForCap(sign, epsg, cands, marginKm, cellM, minNewFrac, forced=(), target=None):
     ''' Greedy cover of the polar cap (|lat| > CAP_LAT) on a polar stereographic raster, from the
     footprints' own corners (no lat/lon distortion near the pole). '''
     import pyproj
@@ -308,7 +323,8 @@ def selectForCap(sign, epsg, cands, marginKm, cellM, minNewFrac, forced=()):
                                all_touched=True).astype(bool)
         if m.any():
             masks.append((g, m))
-    return greedyCover(masks, (n, n), minNewFrac, forced), half - marginKm * 1000.
+    return greedyCover(masks, (n, n), minNewFrac, forced, rasterTarget(target, (n, n), tr)), \
+        half - marginKm * 1000.
 
 
 def main():
@@ -325,7 +341,7 @@ def main():
     ap.add_argument('--cellDeg', type=float, default=0.02, help='selection raster cell [0.02]')
     ap.add_argument('--minNewFrac', type=float, default=0.001,
                     help='skip a granule adding less than this fraction of the tile [0.001]')
-    ap.add_argument('--exclude5MHzOcean', action='store_true',
+    ap.add_argument('--exclude5MHzOcean', action='store_true',  # ocean only: lakes count as land
                     help='drop 5 MHz granules over mid-latitude ocean (keep over land)')
     ap.add_argument('--landFrac', type=float, default=0.05,
                     help='with --exclude5MHzOcean: keep if at least this land fraction [0.05]')
@@ -340,6 +356,10 @@ def main():
     ap.add_argument('--keepFrom', default=None,
                     help='an earlier tiling: every tile keeps exactly its granules and only gains '
                     'granules where cells are still uncovered, so a rerun redoes just the tiles with gaps')
+    ap.add_argument('--fillGaps', default=None,
+                    help='gapReport gaps.geojson of a finished run (with --keepFrom): tiles keep their '
+                    'granules and gain granules only over their actual no-data areas; other tiles do '
+                    'not change')
     ap.add_argument('--fillCatalogues', nargs='+', default=[],
                     help='catalogues of other cycles (e.g. cycle30/catalogue029.geojson), used in the '
                     'order given, only where the main catalogue leaves a tile uncovered')
@@ -358,6 +378,13 @@ def main():
         grans += loadGranules(fc, args.allowV, fill=k)
     nAll = len(grans)
     byName = {g['name']: g for g in grans}          # before any filtering: kept picks stay usable
+    gapOf = {}
+    if args.fillGaps:
+        if not args.keepFrom:
+            ap.error('--fillGaps needs --keepFrom (the tiling the gapped run used)')
+        for f in json.load(open(args.fillGaps))['features']:
+            gapOf[f['properties']['tile']] = unwrap(shape(f['geometry'])) \
+                if f['properties']['epsg'] == 4326 else shape(f['geometry']).buffer(0)
     keepTiles = {}
     if args.keepFrom:
         for path in glob.glob(f'{args.keepFrom}/tiles/*.csv'):
@@ -388,7 +415,10 @@ def main():
         grans = keep
     if args.exclude5MHzOcean:
         import cartopy.feature as cf
-        land = unary_union(list(cf.LAND.with_scale('50m').geometries()))
+        # lakes and inland seas (Caspian, Great Lakes, Victoria, ...) are not ocean: keep 5 MHz there
+        # (Natural Earth leaves the Caspian out of both land and lakes: add it as a box)
+        land = unary_union(list(cf.LAND.with_scale('50m').geometries()) +
+                           list(cf.LAKES.with_scale('50m').geometries()) + [box(46, 36, 55.5, 47.5)])
         keep = []
         for g in grans:
             c = g['geom'].centroid
@@ -423,8 +453,9 @@ def main():
         cands = [grans[i] for i in idx]
         forced = forcedFor(name, cands)
         cands += [g for g in forced if g not in cands and 'geom' in g]
+        target = (gapOf.get(name, box(0, 0, 0, 0)) if args.fillGaps and name in keepTiles else None)
         picks, coverage, unionCells, nCells = selectForTile(tbox, cands, args.marginKm,
-                                                            args.cellDeg, args.minNewFrac, forced)
+                                                            args.cellDeg, args.minNewFrac, forced, target)
         if not picks:
             continue
         stats['tiles'] += 1
@@ -446,8 +477,9 @@ def main():
         cands = [grans[i] for i in idx]
         forced = forcedFor(name, cands)
         cands += [g for g in forced if g not in cands and 'geom' in g]
+        target = (gapOf.get(name, box(0, 0, 0, 0)) if args.fillGaps and name in keepTiles else None)
         (picks, coverage, unionCells, nCells), halfM = selectForCap(
-            sign, epsg, cands, args.marginKm, 2000., args.minNewFrac, forced)
+            sign, epsg, cands, args.marginKm, 2000., args.minNewFrac, forced, target)
         if not picks:
             continue
         writeTile(args.out, name, picks, used)

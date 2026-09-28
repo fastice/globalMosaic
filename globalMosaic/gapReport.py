@@ -9,6 +9,10 @@ tile on a --cells x --cells grid, marks land (Natural Earth 50 m, as the coverag
 counts land cells without data. Writes <work>/quicklooks/gaps.txt (worst first: uncovered land
 in km2 and as a share of the tile's land) and prints the top --top lines. Polar caps are sampled
 in their own polar stereographic grid.
+
+Also writes <work>/quicklooks/gaps.geojson: every no-data area inside each tile (land or water),
+one feature per tile, in the tile's own CRS (property epsg) -- the input for
+`globalGCOVTiles --fillGaps`, which adds granules only there.
 '''
 import argparse
 import collections
@@ -20,7 +24,7 @@ import numpy as np
 from osgeo import gdal
 from rasterio import features
 from rasterio.transform import from_bounds
-from shapely.geometry import box
+from shapely.geometry import box, mapping, shape
 from shapely.ops import transform, unary_union
 
 gdal.UseExceptions()
@@ -40,7 +44,7 @@ def main():
     groups = collections.defaultdict(list)
     for tif in sorted(glob.glob(f'{args.work}/tiles/{args.product}/*.tif')):
         groups[os.path.basename(tif).split('.')[0]].append(tif)
-    rows = []
+    rows, gapFeats = [], []
     n = args.cells
     for name, tifs in groups.items():
         ds = gdal.Open(tifs[0])
@@ -53,6 +57,13 @@ def main():
             t = gdal.Open(tif)          # keep the dataset alive while its band is read
             a = t.GetRasterBand(1).ReadAsArray(buf_xsize=n, buf_ysize=n)
             have |= a != NODATA
+        # every no-data area of the tile, for globalGCOVTiles --fillGaps
+        if not have.all():
+            polys = [shape(g) for g, v in features.shapes((~have).astype(np.uint8), mask=~have,
+                     transform=from_bounds(x0, y0, x1, y1, n, n)) if v]
+            gapFeats.append({'type': 'Feature', 'geometry': mapping(unary_union(polys)),
+                             'properties': {'tile': name, 'epsg': int(epsg),
+                                            'gapFrac': round(float((~have).mean()), 4)}})
         if epsg == '4326':
             tileLand = land.intersection(box(x0, y0, x1, y1))
             lat = y0 + (np.arange(n)[::-1] + 0.5) * (y1 - y0) / n
@@ -82,6 +93,10 @@ def main():
              f'{"tile":<16}{"no-data land km2":>18}{"share of land":>15}']
     lines += [f'{name:<16}{g:>18,.0f}{f:>15.1%}' for g, f, _, name in rows]
     open(f'{args.work}/quicklooks/gaps.txt', 'w').write('\n'.join(lines) + '\n')
+    import json
+    with open(f'{args.work}/quicklooks/gaps.geojson', 'w') as fp:
+        json.dump({'type': 'FeatureCollection', 'features': gapFeats}, fp)
+    print(f'no-data areas of {len(gapFeats)} tiles: {args.work}/quicklooks/gaps.geojson')
     print('\n'.join(lines[:args.top + 2]))
     print(f'full list: {args.work}/quicklooks/gaps.txt')
     return 0
