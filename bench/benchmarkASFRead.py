@@ -37,6 +37,31 @@ VARIANTS = {
     'chunk4M+64strips':   ({'CPL_VSIL_CURL_CHUNK_SIZE': '4194304'}, 64),
 }
 
+# h5py's ROS3 is a different route entirely: HDF5 reads S3 itself, no GDAL, no /vsi layer.
+# It only became usable with ASF in 2023 -- ASF issues TEMPORARY STS credentials, which need a
+# session token, and H5Pset_fapl_ros3_token arrived in HDF5 1.14.2. HDF5 1.10 has ros3 but no
+# token support at all, so it cannot authenticate to ASF. Checked on this machine: system
+# libhdf5 1.10.10 has ros3 WITHOUT tokens; conda libhdf5 1.14.3 has the token API, and
+# h5py 3.11 passes session_token through.
+ROS3WORKER = r'''
+import sys, time, json
+import h5py
+url, xoff, yoff, w, h = sys.argv[1], *map(int, sys.argv[2:6])
+import os
+t0 = time.time()
+f = h5py.File(url, 'r', driver='ros3',
+              aws_region=os.environ['AWS_REGION'].encode(),
+              secret_id=os.environ['AWS_ACCESS_KEY_ID'].encode(),
+              secret_key=os.environ['AWS_SECRET_ACCESS_KEY'].encode(),
+              session_token=os.environ['AWS_SESSION_TOKEN'].encode())
+tOpen = time.time() - t0
+d = f['/science/LSAR/GCOV/grids/frequencyA/HHHH']
+t1 = time.time()
+a = d[yoff:yoff + h, xoff:xoff + w]
+tRead = time.time() - t1
+print(json.dumps({'open': tOpen, 'read': tRead, 'mpx': a.size / 1e6}))
+'''
+
 WORKER = r'''
 import os, sys, time, json
 from osgeo import gdal
@@ -59,12 +84,31 @@ print(json.dumps({'open': tOpen, 'read': tRead, 'mpx': n / 1e6}))
 '''
 
 
+def s3FromSigned(signed):
+    """Pull bucket and key out of ASF's own CloudFront URL.
+
+    The signed URL embeds <bucket>.s3.<region>.amazonaws.com/<key>, so this is ASF telling us
+    where the object really is. Constructing the key from the granule name instead looks right
+    and fails with 'No such file or directory', because the prefix is not guaranteed to match
+    the pattern -- ask, do not guess."""
+    import urllib.parse
+    seg = urllib.parse.urlparse(signed).path.split('/')
+    i = [k for k, v in enumerate(seg) if '.s3.' in v]
+    if not i:
+        return None
+    return '%s/%s' % (seg[i[0]].split('.s3.')[0], '/'.join(seg[i[0] + 1:]))
+
+
 def gdalPath(granule, mode):
     """Build the GDAL subdataset path for a granule stem, over s3 or https."""
+    signed = resolveSigned(granule)
     if mode == 's3':
-        loc = '/vsis3/%s/%s/%s/%s.h5' % (BUCKET.replace('s3://', ''), PREFIX, granule, granule)
+        bk = s3FromSigned(signed)
+        if bk is None:
+            raise RuntimeError('could not read bucket/key from the signed URL')
+        loc = '/vsis3/%s' % bk
     else:
-        loc = '/vsicurl/%s' % resolveSigned(granule)
+        loc = '/vsicurl/%s' % signed
     return 'HDF5:"%s"://%s' % (loc, BAND)
 
 
@@ -87,7 +131,8 @@ def s3Credentials():
     return {'AWS_ACCESS_KEY_ID': c['accessKeyId'],
             'AWS_SECRET_ACCESS_KEY': c['secretAccessKey'],
             'AWS_SESSION_TOKEN': c['sessionToken'],
-            'AWS_REGION': 'us-west-2'}
+            'AWS_REGION': 'us-west-2',
+            'AWS_DEFAULT_REGION': 'us-west-2'}
 
 
 def runOne(path, cfg, strips, win, creds):
@@ -107,8 +152,8 @@ def main():
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument('granule', help='granule stem (no .h5)')
-    ap.add_argument('--mode', choices=['s3', 'https', 'both'], default='both',
-                    help='access path; s3 only works in us-west-2 [both]')
+    ap.add_argument('--mode', choices=['s3', 'https', 'ros3', 'all'], default='all',
+                    help='access path; s3 and ros3 only work in us-west-2 [all]')
     ap.add_argument('--window', type=int, nargs=4, default=[8000, 12000, 4096, 4096],
                     metavar=('XOFF', 'YOFF', 'W', 'H'))
     ap.add_argument('--repeat', type=int, default=2, help='runs per variant, best is kept [2]')
@@ -118,7 +163,7 @@ def main():
     args = ap.parse_args()
 
     names = args.variants or list(VARIANTS)
-    modes = ['s3', 'https'] if args.mode == 'both' else [args.mode]
+    modes = ['s3', 'https', 'ros3'] if args.mode == 'all' else [args.mode]
     mpx = args.window[2] * args.window[3] / 1e6
 
     for mode in modes:
@@ -133,6 +178,28 @@ def main():
             path = gdalPath(args.granule, mode)
         except Exception as e:
             print('%s: cannot build path (%s) -- skipping' % (mode, e))
+            continue
+
+        if mode == 'ros3':
+            # HDF5 talks to S3 directly; there are no GDAL knobs to sweep, so this is one row.
+            url = 'https://%s.s3.us-west-2.amazonaws.com/%s/%s/%s.h5' % (
+                BUCKET.replace('s3://', ''), PREFIX, args.granule, args.granule)
+            env = dict(os.environ)
+            env.update(creds)
+            best = None
+            for _ in range(args.repeat):
+                cmd = [sys.executable, '-c', ROS3WORKER, url] + [str(v) for v in args.window[:4]]
+                pr = subprocess.run(cmd, env=env, capture_output=True, text=True)
+                if pr.returncode != 0:
+                    print('\n=== ros3 ===  FAILED: %s'
+                          % (pr.stderr.strip().splitlines() or ['?'])[-1][:120])
+                    best = None
+                    break
+                best = json.loads(pr.stdout.strip().splitlines()[-1])
+            if best is not None:
+                print('\n=== ros3 (h5py, no GDAL) ===  window %s = %.1f Mpx' % (args.window, mpx))
+                print('  %-20s open %6.2f s  read %7.2f s  %8.2f Mpx/s'
+                      % ('ros3', best['open'], best['read'], mpx / best['read']))
             continue
 
         print('\n=== %s ===  window %s = %.1f Mpx' % (mode, args.window, mpx))
