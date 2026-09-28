@@ -6,7 +6,7 @@ Global, lat/lon-tiled NISAR GCOV backscatter mosaics built with GrIMP `geomosaic
 |---|---|
 | `globalGCOVTiles` | search ASF for one cycle (routine `L2_PR` products only), tile the area in lat/lon (6 x 6 deg to 60 deg, wider bands toward the poles, one polar stereographic tile per cap beyond 84 deg), and pick a non-redundant covering set of granules per tile (tiered 77 -> 40 -> 20 -> 5 MHz greedy cover); writes `tiles.geojson`, per-tile CSVs and geomosaic `-gcov` yamls |
 | `coverageMaps` | coverage map of a tiling run: mid-latitudes plus Arctic and Antarctic polar views, by bandwidth, uncovered land in red |
-| `makeGoogleEarth` | EPSG:4326 KML superoverlay of compressed 8-bit PNG tiles for Google Earth (gdal2tiles geodetic, `--zoom 0-9` default; 10 = full 3" resolution), polar caps warped in |
+| `makeGoogleEarth` | EPSG:4326 KML superoverlay of compressed 8-bit PNG tiles for Google Earth (gdal2tiles geodetic, `--zoom 0-9` default = ~305 m pixels; 11 = full 3" resolution), polar caps warped in |
 | `makeQuickLook` | quick-look PNGs of a run: one per tile (0.01 deg), a global one (0.05 deg) and one per polar cap, in `<work>/quicklooks/` |
 | `runGeomosaicTiles` | run `geomosaic` on every tile (one thread per process, many processes; `-calOutput gamma0`, `dem none`, `-epsg 4326` / `3031` / `3413`), crop the feather margins and build the VRT hierarchy tile -> latitude band -> global |
 

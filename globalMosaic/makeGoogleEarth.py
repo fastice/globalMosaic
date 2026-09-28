@@ -15,8 +15,9 @@ Google Earth product from a runGeomosaicTiles run: an EPSG:4326 KML superoverlay
   3. tiles: gdal2tiles --profile=geodetic -k (KML superoverlay), --zoom levels, PNG tiles,
      resumable (-e). Open <out>/doc.kml in Google Earth.
 
-Zoom (geodetic profile, 256-pixel tiles): level z pixel = 0.703125 / 2**z deg -- 8: 9.9" (~305 m),
-9: 4.9" (~153 m), 10: 2.5" (~76 m, finer than the 3" mosaic, i.e. full resolution).
+Zoom (gdal2tiles geodetic profile, 256-pixel tiles; a level-z tile spans 360 / 2**z deg, as its
+KML shows): pixel = 1.40625 / 2**z deg -- 8: 19.8" (~610 m), 9: 9.9" (~305 m), 10: 4.9" (~153 m),
+11: 2.5" (~76 m, full resolution for a 3" mosaic), 12: 1.2" (~38 m). Size grows ~4x per level.
 '''
 import argparse
 import glob
