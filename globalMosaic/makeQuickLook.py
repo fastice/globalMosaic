@@ -69,8 +69,11 @@ def main():
     os.makedirs(f'{qlDir}/tiles', exist_ok=True)
     everything = sorted(glob.glob(f'{vrtDir}/*.vrt'))
     caps = [v for v in everything if os.path.basename(v).startswith('cap_')]
+    # lat/lon tiles only: a polar cap's own tile VRT is in metres (it is drawn from cap_*.vrt), and
+    # --tileRes in degrees applied to it asks for 0.01 m pixels -- an image that never finishes
     tiles = [v for v in everything if v not in caps and not os.path.basename(v).startswith('band_')
-             and os.path.basename(v) != 'global.vrt']
+             and os.path.basename(v) != 'global.vrt'
+             and gdal.Open(v).GetSpatialRef().GetAuthorityCode(None) == '4326']
     with concurrent.futures.ProcessPoolExecutor(args.processes) as pool:
         small = list(pool.map(tileLook, tiles, [qlDir] * len(tiles), [args.tileRes] * len(tiles),
                               [args.dbMin] * len(tiles), [args.dbMax] * len(tiles)))
