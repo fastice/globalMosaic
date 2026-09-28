@@ -498,7 +498,9 @@ def main():
     progress = Progress(args.work, feats, jobs, grids, products[-1])
     lastDraw = time.time()
     with concurrent.futures.ThreadPoolExecutor(args.nProc) as pool:
-        futures = {pool.submit(runJob, j[2], jobCmd(j[2]), products, args.retries, s3Keys): j for j in jobs}
+        # biggest jobs (most granules) first: a long one started last would set the finish time
+        order = sorted(jobs, key=lambda j: -len(jobInputs(f'{j[2]}/gcov.yaml')[0]))
+        futures = {pool.submit(runJob, j[2], jobCmd(j[2]), products, args.retries, s3Keys): j for j in order}
         for fut in concurrent.futures.as_completed(futures):
             name, grp, _ = futures[fut]
             jobDir, rc, sec, note = fut.result()
