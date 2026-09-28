@@ -19,5 +19,10 @@
 Rebuilt 2026-09-28 with the antimeridian fix (ASF writes footprints crossing 180 with lon > 180;
 they were missing from the W180 tiles): 10 W180 tiles gained granules, 12 jobs.
 
+Rebuilt 2026-09-28 (gap fill): the finished run's progress.png -> gapsFromPicture (land, ice
+shelves, lakes, Caspian) -> ascending/fillGaps.geojson -> globalGCOVTiles --keepFrom <previous>
+--fillGaps ... with valid footprints of ALL cycle-030/031 ascending granules (029 partly scanned;
+ASF returned 503s). 211 tiles gained 581 granules (030: 107, 029: 405, 031: 69); 243 jobs, incl. the cap.
+
 Uncovered land: 2.5% (cycle 030 only) -> 0.7% (with fill): the Antarctic pole hole beyond ascending
 reach, a sliver near 85S 180, and 5 MHz stripes in the Sahara.
