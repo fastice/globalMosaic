@@ -1,6 +1,6 @@
 #!/bin/bash
 # Google Earth tiles alone (runFull.sh already does this after the mosaic), e.g. to redo them
-# with another stretch or zoom:  ZOOM=0-10 test/makeGoogleEarth.sh test/fullAsc.yaml --dbMin -28
+# with another stretch or zoom (it resumes: delete <work>/googleEarth first if the mosaic changed):  ZOOM=0-10 test/makeGoogleEarth.sh test/fullAsc.yaml --dbMin -28
 set -euo pipefail
 cd "$(dirname "$0")/.."
 CONFIG=test/fullAsc.yaml

@@ -16,5 +16,8 @@
         --keepFrom <previous ascending> --direction A --allowV --exclude5MHzOcean --out cycle30/ascending
     coverageMaps cycle30/ascending
 
+Rebuilt 2026-09-28 with the antimeridian fix (ASF writes footprints crossing 180 with lon > 180;
+they were missing from the W180 tiles): 10 W180 tiles gained granules, 12 jobs.
+
 Uncovered land: 2.5% (cycle 030 only) -> 0.7% (with fill): the Antarctic pole hole beyond ascending
 reach, a sliver near 85S 180, and 5 MHz stripes in the Sahara.

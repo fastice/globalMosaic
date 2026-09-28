@@ -112,21 +112,10 @@ def versionRank(stem):
 
 
 def unwrap(geom):
-    ''' Split a footprint that crosses the antimeridian into pieces within -180..180. '''
-    xs = [x for poly in getattr(geom, 'geoms', [geom]) for x, _ in poly.exterior.coords]
-    if max(xs) - min(xs) <= 180:
-        return geom
-    from shapely.affinity import translate
-    from shapely.geometry import Polygon
-    shifted = Polygon([(x + 360 if x < 0 else x, y) for x, y in geom.exterior.coords])
-    west = shifted.intersection(box(0, -90, 180, 90))
-    east = translate(shifted.intersection(box(180, -90, 540, 90)), xoff=-360)
-    return unary_union([west, east])
-
-
-def unwrapValid(geom):
-    ''' unwrap() for any (multi)polygon with holes, e.g. a scanMasks valid-data footprint: parts
-    spanning the antimeridian are shifted to 0..360, repaired, split at 180 and shifted back. '''
+    ''' A footprint as pieces within -180..180. Two ways a footprint crosses the antimeridian: its
+    longitudes jump sign (179 -> -179), or -- as ASF writes them -- run past 180 (177 .. 184.8) or
+    below -180. Both are shifted onto one continuous range, repaired, cut at +-180, and the pieces
+    beyond folded back by 360. Holes and multipolygons are kept (e.g. scanMasks footprints). '''
     from shapely.affinity import translate
     from shapely.geometry import Polygon
     from shapely.validation import make_valid
@@ -136,14 +125,22 @@ def unwrapValid(geom):
     parts = []
     for poly in polys(geom):
         xs = [x for x, _ in poly.exterior.coords]
-        if max(xs) - min(xs) <= 180:
-            parts += polys(make_valid(poly))
+        if max(xs) - min(xs) > 180:
+            sh = lambda c: [(x + 360 if x < 0 else x, y) for x, y in c]
+            poly = Polygon(sh(poly.exterior.coords), [sh(i.coords) for i in poly.interiors])
+            xs = [x + 360 if x < 0 else x for x in xs]
+        whole = make_valid(poly)
+        if min(xs) >= -180 and max(xs) <= 180:
+            parts += polys(whole)
             continue
-        sh = lambda c: [(x + 360 if x < 0 else x, y) for x, y in c]
-        whole = make_valid(Polygon(sh(poly.exterior.coords), [sh(i.coords) for i in poly.interiors]))
-        parts += polys(whole.intersection(box(0, -90, 180, 90)))
-        parts += polys(translate(whole.intersection(box(180, -90, 540, 90)), xoff=-360))
+        for lo, hi, shift in ((-540, -180, 360), (-180, 180, 0), (180, 540, -360)):
+            piece = whole.intersection(box(lo, -90, hi, 90))
+            if not piece.is_empty:
+                parts += polys(translate(piece, xoff=shift) if shift else piece)
     return unary_union(parts)
+
+
+unwrapValid = unwrap        # one routine for catalogue and scanMasks footprints
 
 
 def searchCatalogue(cycle, outFile):
