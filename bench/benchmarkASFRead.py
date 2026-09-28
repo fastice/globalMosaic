@@ -99,16 +99,36 @@ def s3FromSigned(signed):
     return '%s/%s' % (seg[i[0]].split('.s3.')[0], '/'.join(seg[i[0] + 1:]))
 
 
+def s3FromCMR(granule):
+    """Ask CMR where the object actually lives (s3://bucket/key).
+
+    Deriving it from the CloudFront redirect works from outside the region but not from
+    inside, where TEA hands back a different host -- so ask the catalogue rather than parse a
+    URL whose shape depends on where you are standing."""
+    try:
+        import earthaccess
+        earthaccess.login(strategy='netrc')
+        hits = earthaccess.search_data(short_name='NISAR_L2_GCOV_PROVISIONAL_V1',
+                                       granule_name=granule + '*')
+        for h in hits:
+            for link in h.data_links(access='direct'):
+                if link.startswith('s3://') and link.endswith('.h5'):
+                    return link[len('s3://'):]
+    except Exception as e:
+        print('  (CMR lookup failed: %s: %s)' % (type(e).__name__, str(e)[:70]))
+    return None
+
+
 def gdalPath(granule, mode):
     """Build the GDAL subdataset path for a granule stem, over s3 or https."""
-    signed = resolveSigned(granule)
     if mode == 's3':
-        bk = s3FromSigned(signed)
+        bk = s3FromCMR(granule) or s3FromSigned(resolveSigned(granule))
         if bk is None:
-            raise RuntimeError('could not read bucket/key from the signed URL')
+            raise RuntimeError('no direct S3 link from CMR, and the redirect did not carry one')
+        print('  s3 object: s3://%s' % bk)
         loc = '/vsis3/%s' % bk
     else:
-        loc = '/vsicurl/%s' % signed
+        loc = '/vsicurl/%s' % resolveSigned(granule)
     return 'HDF5:"%s"://%s' % (loc, BAND)
 
 
@@ -168,7 +188,7 @@ def main():
 
     for mode in modes:
         creds = {}
-        if mode == 's3':
+        if mode in ('s3', 'ros3'):
             try:
                 creds = s3Credentials()
             except Exception as e:
