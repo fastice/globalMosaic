@@ -62,6 +62,10 @@ from shapely.strtree import STRtree
 
 NAME = re.compile(r'NISAR_L2_PR_GCOV_(\d{3})_(\d{3})_([AD])_(\d{3})_(\d{2})(\d{2})_'
                   r'([A-Z]{2})([A-Z]{2})_([A-Z])_.*_(\d{3})$')
+# GUNW (interferogram pairs): reference cycle, track, direction, frame, secondary cycle, mode, pol,
+# four times, CRID, flags, counter -- e.g. NISAR_L2_PR_GUNW_030_134_A_142_031_4000_SH_..._P05023_N_P_J_001
+GUNW_NAME = re.compile(r'NISAR_L2_PR_GUNW_(\d{3})_(\d{3})_([AD])_(\d{3})_(\d{3})_(\d{2})(\d{2})_'
+                       r'([A-Z]{2})_.*_([PX]\d{5})_[A-Z]_([FP])_[A-Z]_(\d{3})$')
 HPOLS = ('SH', 'DH', 'QP')
 VPOLS = ('SV', 'DV')
 # lat0, lat1, tile height, tile width, lonMult
@@ -79,6 +83,14 @@ def parseName(stem, allowV=False):
     ''' Direction, bandwidths, pols, mixed flag from a GCOV file name (no extension).
     Picks the H channel (A preferred); with allowV, a granule with no H channel falls back to
     its V channel (A preferred) instead of being dropped. '''
+    g = GUNW_NAME.match(stem)
+    if g is not None:
+        # interferogram pair: frequency A, its polarization; cycle = the reference cycle
+        cyc, trk, d, frame, cyc2, bwA, bwB, pol, crid, part, ver = g.groups()
+        if pol not in HPOLS and not (allowV and pol in VPOLS):
+            return None
+        return dict(cycle=cyc, track=trk, direction=d, frame=frame, freq='A', bw=int(bwA), pol=pol,
+                    mixed=False, version=ver)
     m = NAME.match(stem)
     if m is None:
         return None
@@ -100,14 +112,14 @@ def parseName(stem, allowV=False):
 def sceneKey(stem):
     ''' Identity of an acquisition regardless of processing version: everything up to the stop time
     (cycle, track, direction, frame, mode, pol, flag, start, stop). '''
-    return '_'.join(stem.split('_')[:13])
+    return '_'.join(stem.split('_')[:15 if '_GUNW_' in stem else 13])
 
 
 def versionRank(stem):
     ''' Preference among copies of one scene: a P (production) CRID over an X (experimental) one --
     an X is kept only when no P exists -- then the higher CRID, then the higher product counter. '''
     parts = stem.split('_')
-    crid = parts[13]
+    crid = next((p for p in parts if re.fullmatch(r'[PX]\d{5}', p)), 'X0')
     return (crid[0] == 'P', int(crid[1:]) if crid[1:].isdigit() else 0, parts[-1])
 
 
@@ -143,21 +155,22 @@ def unwrap(geom):
 unwrapValid = unwrap        # one routine for catalogue and scanMasks footprints
 
 
-def searchCatalogue(cycle, outFile):
-    ''' All GCOVs of one cycle (by file name), latest product counter each, with footprints. '''
+def searchCatalogue(cycle, outFile, product='GCOV'):
+    ''' All granules of one cycle (by file name; for GUNW the reference cycle), latest product
+    counter each, with footprints. product: GCOV or GUNW. '''
     import asf_search as asf
     asf.constants.INTERNAL.CMR_TIMEOUT = 600
     from datetime import datetime, timedelta
     # cycle 030 began 2026-09-06; cycles are 12 days and spill past the nominal end (030 has
     # acquisitions on 09-18), so search 3 days either side and keep the cycle by file name
     start = datetime(2026, 9, 6) + timedelta(days=12 * (int(cycle) - 30) - 3)
-    res = asf.search(dataset=asf.DATASET.NISAR, processingLevel='GCOV',
+    res = asf.search(dataset=asf.DATASET.NISAR, processingLevel=product,
                      start=start.isoformat(), end=(start + timedelta(days=18)).isoformat(),
                      maxResults=1000000)
     best = {}
     for r in res:
         stem = os.path.basename(r.properties.get('url', ''))[:-3]
-        m = NAME.match(stem) if stem else None
+        m = (GUNW_NAME if product == 'GUNW' else NAME).match(stem) if stem else None
         if m is None or m.group(1) != cycle:
             continue
         # one entry per scene: P over X processing version, then highest CRID and counter
@@ -333,6 +346,8 @@ def main():
     src.add_argument('--cycle', help='search ASF for this cycle (e.g. 030) and cache the catalogue')
     src.add_argument('--catalogue', help='existing catalogue.geojson')
     ap.add_argument('--out', required=True, help='output directory')
+    ap.add_argument('--product', choices=['GCOV', 'GUNW'], default='GCOV',
+                    help='product searched with --cycle [GCOV]; catalogues of either kind are read as they are')
     ap.add_argument('--bbox', type=float, nargs=4, default=[-180, -90, 180, 77.5],
                     metavar=('W', 'S', 'E', 'N'), help='area [globe south of 77.5N]')
     ap.add_argument('--bands', help='JSON list of [lat0, lat1, height, width, lonMult] '
@@ -371,7 +386,7 @@ def main():
     args = ap.parse_args()
 
     os.makedirs(f'{args.out}/tiles', exist_ok=True)
-    catalogue = args.catalogue or searchCatalogue(args.cycle, f'{args.out}/catalogue.geojson')
+    catalogue = args.catalogue or searchCatalogue(args.cycle, f'{args.out}/catalogue.geojson', args.product)
     nCat = len(json.load(open(catalogue))['features'])
     grans = loadGranules(catalogue, args.allowV)
     for k, fc in enumerate(args.fillCatalogues, 1):

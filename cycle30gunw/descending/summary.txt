@@ -1,0 +1,2 @@
+catalogue cycle30gunw/catalogue.geojson: 7326 granules, 29609 usable (H only); dropped {'direction': 14869}
+tiles 692; granule-tile pairs available 31541, selected 8626; distinct granules used 5047 of 14740
