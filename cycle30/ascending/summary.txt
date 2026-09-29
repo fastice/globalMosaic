@@ -1,2 +1,2 @@
-catalogue cycle30/catalogue.geojson: 16160 granules, 42481 usable (H, V fallback); dropped {'direction': 21064, 'no valid data (mask)': 347, '5MHz ocean': 1491}
-tiles 763; granule-tile pairs available 39102, selected 10136; distinct granules used 6535 of 19579
+catalogue cycle30/catalogue.geojson: 16160 granules, 46728 usable (H, V fallback); dropped {'direction': 23093, 'no valid data (mask)': 347, '5MHz ocean': 1672}
+tiles 764; granule-tile pairs available 43194, selected 11321; distinct granules used 7186 of 21616
