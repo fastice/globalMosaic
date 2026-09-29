@@ -48,9 +48,6 @@ def main():
     ap.add_argument('--processes', type=int, default=16, help='gdal2tiles processes [16]')
     args = ap.parse_args()
 
-    os.makedirs(args.out, exist_ok=True)
-    stage = f'{args.out}/stage'
-    os.makedirs(stage, exist_ok=True)
     if args.sources:
         inputs, res = [os.path.abspath(s) for s in args.sources], args.res
     else:
@@ -62,6 +59,16 @@ def main():
         ds = None
         # polar caps first (own CRS), bands on top
         inputs = sorted(glob.glob(f'{vrtDir}/cap_*.vrt')) + [f'{vrtDir}/global.vrt']
+    return superoverlay(inputs, res, args.out, args.zoom, args.dbMin, args.dbMax,
+                        args.resampling, args.processes)
+
+
+def superoverlay(inputs, res, out, zoom, dbMin=-24., dbMax=-1., resampling='average', processes=16):
+    ''' KML superoverlay of 8-bit PNG tiles of int16 dB x 100 rasters (any CRS) at <out>/doc.kml.
+    Returns gdal2tiles' exit code. '''
+    os.makedirs(out, exist_ok=True)
+    stage = f'{out}/stage'
+    os.makedirs(stage, exist_ok=True)
     # 1. anything not already lat/lon is warped to EPSG:4326 at the mosaic spacing (virtual)
     srcs = []
     for src in inputs:
@@ -79,26 +86,25 @@ def main():
     # 2. 8-bit stretch; the source nodata becomes a mask band (transparent in the PNGs)
     byte = f'{stage}/mosaic.byte.vrt'
     gdal.Translate(byte, mosaic, format='VRT', outputType=gdal.GDT_Byte, noData=0,
-                   scaleParams=[[args.dbMin * 100, args.dbMax * 100, 1, 255]], maskBand='auto')
+                   scaleParams=[[dbMin * 100, dbMax * 100, 1, 255]], maskBand='auto')
     # VRT scaling does not clamp to 1..255: data darker than dbMin would land on 0 = nodata
     # (transparent). A LUT clamps at its end points; source nodata is applied before it.
     with open(byte) as fp:
         xml = fp.read()
     xml = re.sub(r'\s*<ScaleOffset>.*?</ScaleOffset>\s*<ScaleRatio>.*?</ScaleRatio>',
-                 f'\n      <LUT>{args.dbMin * 100:g}:1,{args.dbMax * 100:g}:255</LUT>', xml)
+                 f'\n      <LUT>{dbMin * 100:g}:1,{dbMax * 100:g}:255</LUT>', xml)
     xml = re.sub(r'\s*<Scale>.*?</Scale>', '', xml)
     with open(byte, 'w') as fp:
         fp.write(xml)
     # 3. KML superoverlay of PNG tiles
-    cmd = ['gdal2tiles.py', '--profile=geodetic', '-k', '-z', args.zoom, '-r', args.resampling,
-           f'--processes={args.processes}', '-w', 'none', '-e', '--tiledriver=PNG', byte, args.out]
+    cmd = ['gdal2tiles.py', '--profile=geodetic', '-k', '-z', zoom, '-r', resampling,
+           f'--processes={processes}', '-w', 'none', '-e', '--tiledriver=PNG', byte, out]
     print(' '.join(cmd), flush=True)
     rc = subprocess.run(cmd).returncode
     if rc == 0:
-        n = sum(len(f) for _, _, f in os.walk(args.out) if True)
-        print(f'done: {args.out}/doc.kml; files under {args.out}: {n}')
+        n = sum(len(f) for _, _, f in os.walk(out))
+        print(f'done: {out}/doc.kml; files under {out}: {n}')
     return rc
-
 
 if __name__ == '__main__':
     sys.exit(main())

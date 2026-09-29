@@ -2,7 +2,7 @@
 # repo root). Level 11 pixels are 360 / (256 * 2**11) deg = 2.47"; 2.4" is the nearest spacing that
 # divides the 6-deg tiles exactly (9000 px), so gdal2tiles only averages down slightly.
 # Same tiling and reads as fullAsc.yaml: run time is about the same (the cap sets it), memory per
-# job ~1.6x, disk ~1.6x, Google Earth at zoom 0-11 ~30 GB.
+# job ~1.6x, disk ~1.6x.
 tileRun: cycle30/ascending
 work: /scratch/ianj/mosaics/cycle30ascending_z11   # run directory: tiles, VRTs, googleEarth/, run.log
 granules: vsicurl
@@ -12,4 +12,5 @@ psResM: 75                     # south polar cap spacing, m (level 11 ~ 76 m)
 calOutput: gamma0
 featherKm: 10
 retries: 2
-zoom: 0-11                     # Google Earth levels built by test/runFull.sh
+zoom: tiered                   # Google Earth: base 0-9, land 5-10 (smoothed), detail 7-11 where it matters
+                               # (makeGoogleEarthTiered); '0-11' would do zoom 11 everywhere (~70-100 GB)

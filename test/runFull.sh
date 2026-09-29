@@ -10,7 +10,7 @@ CONFIG=${CONFIG:-test/fullAsc.yaml}
 # the run yaml can also be given first:  bash test/runFull.sh test/fullDesc.yaml
 if [[ "${1:-}" == *.yaml ]]; then CONFIG=$1; shift; fi
 WORK=$(python3 -c "import yaml; print(yaml.safe_load(open('$CONFIG'))['work'])")
-# Google Earth zoom levels: ZOOM, else the yaml's zoom:, else 0-9
+# Google Earth zoom levels (or 'tiered'): ZOOM, else the yaml's zoom:, else 0-9
 export ZOOM=${ZOOM:-$(python3 -c "import yaml; print(yaml.safe_load(open('$CONFIG')).get('zoom') or '0-9')")}
 mkdir -p $WORK
 nohup bash -c '
@@ -21,7 +21,12 @@ nohup bash -c '
     echo "=== quick looks in $1/quicklooks; Google Earth tiles"
     # from scratch: gdal2tiles keeps existing PNGs, which would hide tiles the mosaic just changed
     rm -rf "$1/googleEarth" "$1/googleEarth.tar"
-    makeGoogleEarth "$1" --out "$1/googleEarth" --processes ${NPROC:-24} --zoom ${ZOOM:-0-9}
+    if [ "${ZOOM:-0-9}" = tiered ]; then
+        # base 0-9 everywhere, land 5-10 smoothed, detail 7-11 (40/77 MHz land, ice margins, glaciers)
+        makeGoogleEarthTiered "$1" --out "$1/googleEarth" --processes ${NPROC:-24}
+    else
+        makeGoogleEarth "$1" --out "$1/googleEarth" --processes ${NPROC:-24} --zoom ${ZOOM:-0-9}
+    fi
     # one file to copy off the machine: PNGs are already compressed, so a plain tar
     tar -cf "$1/googleEarth.tar" -C "$1" --exclude=googleEarth/stage googleEarth
     echo "=== all done $(date): open $1/googleEarth/doc.kml; archive $1/googleEarth.tar"
