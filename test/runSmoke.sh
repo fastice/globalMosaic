@@ -14,7 +14,7 @@ mkdir -p $WORK
     time runGeomosaicTiles --config $CONFIG "$@"
     grep -h 'read+average' $WORK/jobs/*/log
     makeQuickLook $WORK --processes ${NPROC:-24}
-    time makeGoogleEarth $WORK --out $WORK/googleEarth --processes ${NPROC:-24} --zoom ${ZOOM:-0-9}
+    time makeGoogleEarth $WORK --out $WORK/googleEarth --title "NISAR gamma0 smoke test $(basename $WORK)" --processes ${NPROC:-24} --zoom ${ZOOM:-0-9}
     tar -cf $WORK/googleEarth.tar -C $WORK --exclude=googleEarth/stage googleEarth
     echo "=== all done $(date): open $WORK/googleEarth/doc.kml; archive $WORK/googleEarth.tar"
 } 2>&1 | tee $WORK/run.log

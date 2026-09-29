@@ -190,6 +190,7 @@ def main():
     ap.add_argument('--marginKm', type=float, default=200., help='ice-sheet margin width, km [200]')
     ap.add_argument('--processes', type=int, default=16)
     ap.add_argument('--skipTiles', action='store_true', help='reuse existing src10/src11 (tiling only)')
+    ap.add_argument('--title', default=None, help='name shown in Google Earth [NISAR <product> <run name>]')
     args = ap.parse_args()
     work = os.path.abspath(args.work)
     out = os.path.abspath(args.out or f'{work}/googleEarth')
@@ -249,6 +250,7 @@ def main():
                     print(f'  {k}/{len(jobs)} {name}: {", ".join(notes) or "no land"}', flush=True)
 
     caps = sorted(glob.glob(f'{vrtDir}/cap_*.vrt'))
+    runName = args.title or f'NISAR {args.product} {os.path.basename(work)}'
     layers = []
     for title, sub, srcs, r, zoom in (
             ('base (zoom 0-9, everything)', 'base', caps + [f'{vrtDir}/global.vrt'], res, '0-9'),
@@ -258,7 +260,8 @@ def main():
         if not srcs:
             print(f'{sub}: nothing to tile')
             continue
-        rc = superoverlay(srcs, r, f'{out}/{sub}', zoom, processes=args.processes)
+        rc = superoverlay(srcs, r, f'{out}/{sub}', zoom, processes=args.processes,
+                          title=f'{runName} - {title}')
         if rc:
             return rc
         layers.append((title, sub))
@@ -266,7 +269,7 @@ def main():
                       for n, d in layers)
     with open(f'{out}/doc.kml', 'w') as fp:
         fp.write('<?xml version="1.0" encoding="UTF-8"?>\n<kml xmlns="http://www.opengis.net/kml/2.2">\n'
-                 f'  <Document>\n    <name>{os.path.basename(work)}</name>\n{links}\n  </Document>\n</kml>\n')
+                 f'  <Document>\n    <name>{runName}</name>\n{links}\n  </Document>\n</kml>\n')
     print(f'done: {out}/doc.kml')
     return 0
 

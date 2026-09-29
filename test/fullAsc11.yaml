@@ -14,3 +14,4 @@ featherKm: 10
 retries: 2
 zoom: tiered                   # Google Earth: base 0-9, land 5-10 (smoothed), detail 7-11 where it matters
                                # (makeGoogleEarthTiered); '0-11' would do zoom 11 everywhere (~70-100 GB)
+title: "NISAR gamma0, cycle 30 ascending, 2.4 arcsec (zoom to 11 where it matters)"          # name shown in Google Earth

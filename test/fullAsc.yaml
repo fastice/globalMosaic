@@ -11,3 +11,4 @@ featherKm: 10
 retries: 2
 # The south cap is one ~13 h single-threaded job (52 granules); uncomment to leave it out.
 # excludeTiles: [S84PS3031]
+title: "NISAR gamma0, cycle 30 ascending, 3 arcsec"          # name shown in Google Earth

@@ -25,6 +25,7 @@ import os
 import re
 import subprocess
 import sys
+from xml.sax.saxutils import escape
 
 from osgeo import gdal
 
@@ -46,7 +47,16 @@ def main():
     ap.add_argument('--dbMax', type=float, default=-1., help='stretch maximum, dB [-1]')
     ap.add_argument('--resampling', default='average', help='gdal2tiles resampling [average]')
     ap.add_argument('--processes', type=int, default=16, help='gdal2tiles processes [16]')
+    ap.add_argument('--title', default=None,
+                    help='name shown in Google Earth [NISAR <product> <run directory name>]')
+    ap.add_argument('--retitle', action='store_true',
+                    help='only rename an existing product (<out>/doc.kml) to --title, no tiling')
     args = ap.parse_args()
+    title = args.title or f'NISAR {args.product} {os.path.basename(os.path.abspath(args.work or args.out))}'
+    if args.retitle:
+        setTitle(f'{args.out}/doc.kml', title)
+        print(f'{args.out}/doc.kml -> "{title}"')
+        return 0
 
     if args.sources:
         inputs, res = [os.path.abspath(s) for s in args.sources], args.res
@@ -60,10 +70,18 @@ def main():
         # polar caps first (own CRS), bands on top
         inputs = sorted(glob.glob(f'{vrtDir}/cap_*.vrt')) + [f'{vrtDir}/global.vrt']
     return superoverlay(inputs, res, args.out, args.zoom, args.dbMin, args.dbMax,
-                        args.resampling, args.processes)
+                        args.resampling, args.processes, title)
 
 
-def superoverlay(inputs, res, out, zoom, dbMin=-24., dbMax=-1., resampling='average', processes=16):
+def setTitle(kml, title):
+    ''' Rename a superoverlay: the first <name> of its doc.kml (what Google Earth lists). '''
+    s = open(kml).read()
+    s = re.sub(r'<name>.*?</name>', f'<name>{escape(title)}</name>', s, count=1)
+    open(kml, 'w').write(s)
+
+
+def superoverlay(inputs, res, out, zoom, dbMin=-24., dbMax=-1., resampling='average', processes=16,
+                 title=None):
     ''' KML superoverlay of 8-bit PNG tiles of int16 dB x 100 rasters (any CRS) at <out>/doc.kml.
     Returns gdal2tiles' exit code. '''
     os.makedirs(out, exist_ok=True)
@@ -98,9 +116,12 @@ def superoverlay(inputs, res, out, zoom, dbMin=-24., dbMax=-1., resampling='aver
         fp.write(xml)
     # 3. KML superoverlay of PNG tiles
     cmd = ['gdal2tiles.py', '--profile=geodetic', '-k', '-z', zoom, '-r', resampling,
-           f'--processes={processes}', '-w', 'none', '-e', '--tiledriver=PNG', byte, out]
+           f'--processes={processes}', '-w', 'none', '-e', '--tiledriver=PNG'] + \
+        (['-t', title] if title else []) + [byte, out]
     print(' '.join(cmd), flush=True)
     rc = subprocess.run(cmd).returncode
+    if rc == 0 and title:
+        setTitle(f'{out}/doc.kml', title)        # also when gdal2tiles resumed an older product
     if rc == 0:
         n = sum(len(f) for _, _, f in os.walk(out))
         print(f'done: {out}/doc.kml; files under {out}: {n}')

@@ -193,7 +193,8 @@ def main():
                     '--dbMin', '0', '--dbMax', '100', '--processes', str(args.nProc)])
     from .makeGoogleEarth import superoverlay
     rc = superoverlay([f'{vd}/cap_{n}.vrt' for n, _ in caps] + [f'{vd}/global.vrt'], args.res,
-                      f'{work}/googleEarth', args.zoom, dbMin=0., dbMax=100., processes=args.nProc)
+                      f'{work}/googleEarth', args.zoom, dbMin=0., dbMax=100., processes=args.nProc,
+                      title=f'NISAR 12-day coherence {os.path.basename(work)}')
     log(f'Google Earth: {work}/googleEarth/doc.kml (rc {rc})', summary)
     return rc
 
