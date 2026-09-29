@@ -44,7 +44,7 @@ def httpSetup(cookieDir):
                  ('GDAL_HTTP_COOKIEJAR', cookies), ('GDAL_DISABLE_READDIR_ON_OPEN', 'EMPTY_DIR'),
                  ('GDAL_HTTP_MAX_RETRY', '5'), ('GDAL_HTTP_RETRY_DELAY', '10'),
                  # big reads: bandwidth-bound instead of request-latency-bound
-                 ('CPL_VSIL_CURL_CHUNK_SIZE', str(16 * 1024 * 1024)),
+                 ('CPL_VSIL_CURL_CHUNK_SIZE', str(10 * 1024 * 1024)),     # GDAL maximum; larger falls back to 16 KB
                  ('CPL_VSIL_CURL_CACHE_SIZE', str(1024 * 1024 * 1024)),
                  ('GDAL_HTTP_MULTIRANGE', 'YES'), ('GDAL_HTTP_MERGE_CONSECUTIVE_RANGES', 'YES')):
         gdal.SetConfigOption(k, v)
