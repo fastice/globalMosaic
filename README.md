@@ -11,6 +11,8 @@ Global, lat/lon-tiled NISAR GCOV backscatter mosaics built with GrIMP `geomosaic
 | `makeGoogleEarthTiered` | Google Earth with the zoom limit following the data: base 0-9 everywhere (ocean and sea ice stop there), land 5-10 (2x averaged + 3x3 smoothed, no-data aware), detail 7-11 over 40/77 MHz land, ice-sheet margins (200 km of the grounded coast, plus ice shelves) and glaciers; one doc.kml loads all three |
 | `backscatterHistograms` | area-weighted backscatter histograms and percentiles of a run: global, land, ocean, continents, Greenland, sea-ice stand-ins (ocean S of 55S / N of 60N, or `--iceMask`); `<work>/stats/` |
 | `mosaicCoherence` | 12-day coherence mosaic from GUNW (frequency A unwrappedInterferogram coherenceMagnitude, 80 m), averaged where pairs overlap, on a GUNW tiling (`cycle30gunw/`); quick looks and Google Earth zoom 0-9 |
+| `frameStatistics` | temporal statistics per (track, frame) over GCOV cycles: mean gamma0, sigma, CV, speckle-corrected CV, n, at 80 m (large https reads, linear power, no per-cycle files) |
+| `mosaicStatistics` | mosaics the frame statistics with geomosaic `-geo` (linear, weighted by n) onto the tiling's tiles; progress picture; optional Google Earth of cv / cvc |
 | `runGeomosaicTiles` | run `geomosaic` on every tile (one thread per process, many processes; `-calOutput gamma0`, `dem none`, `-epsg 4326` / `3031` / `3413`), crop the feather margins and build the VRT hierarchy tile -> latitude band -> global |
 
 Direction, bandwidth and polarization come from granule file names (ASF's `flightDirection`
@@ -30,6 +32,7 @@ test/runSmoke.sh [test/smokeAsc.yaml]   # default test/smokeAsc.yaml (ascending)
 test/runFull.sh [test/fullDesc.yaml]    # default test/fullAsc.yaml (ascending); test/full.yaml = both: 930 jobs, 24 procs, then Google Earth (background)
 test/monitor.sh [yaml]   # progress picture from disk, safe while a run goes: <work>/quicklooks/monitor.png
 test/runCoherence.sh     # GUNW coherence mosaic (DIR=descending for descending) -> /scratch/ianj/mosaics/coherence30asc
+test/runStatistics.sh    # temporal statistics (CV) of cycles 023-031, ascending -> /scratch/ianj/mosaics/stats30asc
 test/histograms.sh [yaml]  # backscatter histograms -> <work>/stats/histograms.png, percentiles.csv
 test/makeGoogleEarth.sh  # redo the Google Earth tiles (other stretch/zoom)
 ```

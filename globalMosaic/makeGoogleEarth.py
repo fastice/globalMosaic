@@ -81,7 +81,9 @@ def setTitle(kml, title):
 
 
 def superoverlay(inputs, res, out, zoom, dbMin=-24., dbMax=-1., resampling='average', processes=16,
-                 title=None):
+                 title=None, nodata=NODATA, scale=100.):
+    ''' nodata / scale: int16 dB x 100 with -3000 by default; Float32 linear layers (e.g. CV) pass
+    nodata=float('nan'), scale=1 and the stretch in their own units as dbMin/dbMax. '''
     ''' KML superoverlay of 8-bit PNG tiles of int16 dB x 100 rasters (any CRS) at <out>/doc.kml.
     Returns gdal2tiles' exit code. '''
     os.makedirs(out, exist_ok=True)
@@ -96,21 +98,21 @@ def superoverlay(inputs, res, out, zoom, dbMin=-24., dbMax=-1., resampling='aver
             continue
         warped = f'{stage}/{os.path.splitext(os.path.basename(src))[0]}.4326.vrt'
         gdal.Warp(warped, src, format='VRT', dstSRS='EPSG:4326', xRes=res, yRes=res,
-                  srcNodata=NODATA, dstNodata=NODATA, resampleAlg='average')
+                  srcNodata=nodata, dstNodata=nodata, resampleAlg='average')
         srcs.append(warped)
     mosaic = f'{stage}/mosaic.vrt'
-    gdal.BuildVRT(mosaic, srcs, resolution='user', xRes=res, yRes=res, srcNodata=NODATA,
-                  VRTNodata=NODATA)
+    gdal.BuildVRT(mosaic, srcs, resolution='user', xRes=res, yRes=res, srcNodata=nodata,
+                  VRTNodata=nodata)
     # 2. 8-bit stretch; the source nodata becomes a mask band (transparent in the PNGs)
     byte = f'{stage}/mosaic.byte.vrt'
     gdal.Translate(byte, mosaic, format='VRT', outputType=gdal.GDT_Byte, noData=0,
-                   scaleParams=[[dbMin * 100, dbMax * 100, 1, 255]], maskBand='auto')
+                   scaleParams=[[dbMin * scale, dbMax * scale, 1, 255]], maskBand='auto')
     # VRT scaling does not clamp to 1..255: data darker than dbMin would land on 0 = nodata
     # (transparent). A LUT clamps at its end points; source nodata is applied before it.
     with open(byte) as fp:
         xml = fp.read()
     xml = re.sub(r'\s*<ScaleOffset>.*?</ScaleOffset>\s*<ScaleRatio>.*?</ScaleRatio>',
-                 f'\n      <LUT>{dbMin * 100:g}:1,{dbMax * 100:g}:255</LUT>', xml)
+                 f'\n      <LUT>{dbMin * scale:g}:1,{dbMax * scale:g}:255</LUT>', xml)
     xml = re.sub(r'\s*<Scale>.*?</Scale>', '', xml)
     with open(byte, 'w') as fp:
         fp.write(xml)
