@@ -124,6 +124,9 @@ def superoverlay(inputs, res, out, zoom, dbMin=-24., dbMax=-1., resampling='aver
     rc = subprocess.run(cmd).returncode
     if rc == 0 and title:
         setTitle(f'{out}/doc.kml', title)        # also when gdal2tiles resumed an older product
+    if rc == 0:                                  # ocean overlays at sea level, not under the water
+        from .oceanAltitude import liftOcean
+        liftOcean(out, processes=processes)
     if rc == 0:
         n = sum(len(f) for _, _, f in os.walk(out))
         print(f'done: {out}/doc.kml; files under {out}: {n}')
