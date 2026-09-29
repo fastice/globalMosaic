@@ -12,6 +12,8 @@ overlapping frames are averaged weighted by their sample count; feathered with -
 Linear Float32 output (NaN = no data), cropped to the tile:
   <work>/tiles/<layer>/<tile>.tif, layers mean (gamma0, linear), sigma, cv (raw), n. VRTs per layer: <work>/vrt/<layer>/{<tile>, global, cap_<name>}.vrt.
 Progress: <work>/quicklooks/progress.png (60S-60N and both polar views, of cv) every 5 minutes.
+Per tile: <work>/quicklooks/tiles/<tile>.png, the four layers (mean and sigma in dB, cv, n) at ~1000 px;
+made for finished tiles too, so a rerun adds them to an existing run.
 Resumable: finished tiles are skipped. The frame files are kept (inputs for reruns).
 '''
 import argparse
@@ -33,6 +35,11 @@ from .runGeomosaicTiles import tileGrid, log, Progress
 gdal.UseExceptions()
 LAYERS = {'mean': 1, 'sigma': 2, 'cv': 3, 'n': 4}
 NODATA = -3000
+# tile quick looks: title, colour map, range, shown in dB
+LOOKS = {'mean': ('mean gamma0 (dB)', 'gray', -24., -1., True),
+         'sigma': ('temporal sigma (dB)', 'gray', -30., -5., True),
+         'cv': ('CV = sigma / mean', 'viridis', 0., 0.6, False),
+         'n': ('n (cycles)', 'plasma', 0., 9., False)}
 
 
 def frameKey(name):
@@ -45,6 +52,7 @@ def runJob(job):
     name, grid, files, work, geomosaic, env = job
     outs = {L: f'{work}/tiles/{L}/{name}.tif' for L in LAYERS}
     if all(os.path.exists(o) for o in outs.values()):
+        tileLook(name, work)
         return name, 0., 'skipped (done)'
     t0 = time.time()
     jd = f'{work}/jobs/{name}'
@@ -73,7 +81,38 @@ def runJob(job):
         os.makedirs(os.path.dirname(outs[L]), exist_ok=True)
         cropFloat(raw[0], outs[L], grid)
         os.remove(raw[0])
+    tileLook(name, work)
     return name, time.time() - t0, ', '.join(notes) or f'{len(files)} frames'
+
+
+def tileLook(name, work, size=1000):
+    ''' <work>/quicklooks/tiles/<tile>.png: the four layers side by side, about size px across each. '''
+    png = f'{work}/quicklooks/tiles/{name}.png'
+    tifs = {L: f'{work}/tiles/{L}/{name}.tif' for L in LAYERS}
+    if os.path.exists(png) or not all(os.path.exists(t) for t in tifs.values()):
+        return
+    import matplotlib
+    matplotlib.use('Agg')
+    import matplotlib.pyplot as plt
+    os.makedirs(os.path.dirname(png), exist_ok=True)
+    fig, axs = plt.subplots(1, 4, figsize=(20, 5.6), constrained_layout=True)
+    for ax, (L, (label, cmap, lo, hi, toDb)) in zip(axs, LOOKS.items()):
+        ds = gdal.Open(tifs[L])
+        k = max(ds.RasterXSize, ds.RasterYSize) / size
+        nx, ny = max(int(ds.RasterXSize / k), 1), max(int(ds.RasterYSize / k), 1)
+        a = ds.GetRasterBand(1).ReadAsArray(buf_xsize=nx, buf_ysize=ny, resample_alg=gdal.GRIORA_Average)
+        if toDb:
+            with np.errstate(divide='ignore', invalid='ignore'):
+                a = 10 * np.log10(a)
+        gt = ds.GetGeoTransform()
+        ext = [gt[0], gt[0] + ds.RasterXSize * gt[1], gt[3] + ds.RasterYSize * gt[5], gt[3]]
+        im = ax.imshow(np.ma.masked_invalid(a), cmap=cmap, vmin=lo, vmax=hi, extent=ext, interpolation='nearest')
+        ax.set_title(label, fontsize=10)
+        ax.tick_params(labelsize=7)
+        fig.colorbar(im, ax=ax, shrink=0.8)
+    fig.suptitle(name)
+    fig.savefig(png, dpi=100)
+    plt.close(fig)
 
 
 def cropFloat(src, dst, grid):
