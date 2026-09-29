@@ -251,7 +251,9 @@ class Progress:
     '''
     RES, CAPRES = 0.1, 5000.       # progress image spacing: deg for lat/lon tiles, m for caps
 
-    def __init__(self, work, feats, jobs, grids, product):
+    def __init__(self, work, feats, jobs, grids, product, dbMin=-24., dbMax=-1.):
+        # grey stretch of the stored int16 values / 100 (dB for backscatter; 0-100 = coherence 0-1)
+        self.dbMin, self.dbMax = dbMin, dbMax
         self.dir, self.total, self.done, self.failed = f'{work}/quicklooks', len(jobs), 0, 0
         self.t0, self.pieces, self.caps = time.time(), [], {}
         os.makedirs(f'{self.dir}/progress', exist_ok=True)
@@ -335,7 +337,7 @@ class Progress:
                                 srcNodata=NODATA, VRTNodata=NODATA)
             a = vrt.GetRasterBand(1).ReadAsArray(buf_xsize=nx, buf_ysize=ny)
             have = a != NODATA
-            rgb[have] = stretch(a)[have][:, None]
+            rgb[have] = stretch(a, self.dbMin, self.dbMax)[have][:, None]
             alpha[have] = 255
         return rgb, alpha
 
@@ -367,7 +369,7 @@ class Progress:
                               resampleAlg='average', srcNodata=NODATA, dstNodata=NODATA)
                 d = w.GetRasterBand(1).ReadAsArray()
                 have = d != NODATA
-                c[have] = stretch(d)[have][:, None]
+                c[have] = stretch(d, self.dbMin, self.dbMax)[have][:, None]
                 a[have] = 255
         a[sign * lat < 60] = 0
         return c, a, (-r / 1000, r / 1000, -r / 1000, r / 1000)

@@ -159,18 +159,33 @@ def main():
         name, props = f['properties']['name'], f['properties']
         g = tileGrid(props, f['geometry'], args.res, args.psResM, 0.)
         # tileGrid: edges x0, y0 (south-west), sizes nx, ny, spacings dx, dy (> 0); no margin
-        grid = dict(epsg=g['epsg'], x0=g['x0'], y0=g['y0'], nx=g['nx'], ny=g['ny'], dx=g['dx'], dy=g['dy'])
+        grid = dict(epsg=g['epsg'], x0=g['x0'], y0=g['y0'], nx=g['nx'], ny=g['ny'], dx=g['dx'], dy=g['dy'],
+                    tile=g['tile'])
         urls = [r['url'] for r in csv.DictReader(open(f'{args.tileRun}/tiles/{name}.csv'))]
         jobs.append((name, grid, urls, f'{work}/tiles/coherence/{name}.tif', f'{work}/jobs'))
     jobs.sort(key=lambda j: -len(j[2]))                       # biggest first
     log(f'{len(jobs)} tiles, {args.nProc} processes, res {args.res * 3600:.1f} arcsec / caps '
         f'{args.psResM:.0f} m; GUNW coherence', summary)
     done = failedTiles = 0
+    # progress picture (quicklooks/progress.png: 60S-60N plus both polar views), as the backscatter
+    # driver draws it; coherence is stored x 10000, i.e. 0..100 after the /100 of the stretch
+    from .runGeomosaicTiles import Progress
+    outOf = {j[0]: j[3] for j in jobs}
+    progress = Progress(work, feats, [(j[0], 'coh', j[0]) for j in jobs], {j[0]: j[1] for j in jobs},
+                        'coherence', dbMin=0., dbMax=100.)
+    lastDraw = time.time()
     with concurrent.futures.ProcessPoolExecutor(args.nProc) as pool:
         for name, sec, nFail, note in pool.map(tileJob, jobs):
             done += 1
             failedTiles += bool(nFail)
             log(f'[{done}/{len(jobs)}, {failedTiles} with failures] {name}: {sec / 60:.1f} min {note}', summary)
+            if os.path.exists(outOf[name]):
+                progress.addJob(name, 'coh', outOf[name])
+            progress.count(not nFail, name)
+            if time.time() - lastDraw > 300:
+                progress.draw()
+                lastDraw = time.time()
+    progress.draw()
     # VRTs: per tile, global lat/lon, one per cap
     vd = f'{work}/vrt/coherence'
     os.makedirs(vd, exist_ok=True)
