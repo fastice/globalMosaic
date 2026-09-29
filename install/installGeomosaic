@@ -304,6 +304,22 @@ else
   table at the top of this script against what is actually published."
 fi
 
+# Second capability: -geo, the geocoded-raster input / linear output mode used for the
+# temporal-statistics mosaics. Same shape of test -- an empty file list, so the run is
+# expected to stop with "No range/Doppler or GCOV inputs"; what matters is that the flag
+# parsed and the yaml was read. A binary without -geo prints the usage banner instead.
+note "verifying the installed binary supports -geo"
+printf 'band: 1\nfiles:\n' > "$tmp/geo.yaml"
+( cd "$tmp" && OPENBLAS_NUM_THREADS=1 "$BINDIR/geomosaic" -epsg 4326 \
+      -geo geo.yaml tiny.in none geochk ) > "$tmp/geochk.log" 2>&1 || true
+if grep -q 'geo yaml = geo.yaml' "$tmp/geochk.log"; then
+    note "-geo capability check PASSED"
+else
+    die "the installed geomosaic does NOT support -geo (geocoded-raster input, linear output).
+  The mosaicSource checkout predates that work -- check the BRANCH table at the top of
+  this script against what is actually published."
+fi
+
 echo
 echo "geomosaic installed: $BINDIR/geomosaic"
 echo
