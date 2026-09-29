@@ -15,11 +15,9 @@ posting). Granules of one cycle (a partial plus a full frame) are merged into th
 sample. Across cycles: sum, sum of squares, count per cell.
 
 Output <out>/<track>_<frame>_<mode>.tif, the frame's CRS at --resM, Float32, NaN = no data:
-  1 mean gamma0 (linear)   2 sigma (sample std, linear)   3 CV = sigma / mean
-  4 CV with the speckle floor removed, sqrt(max(CV^2 - <1/L>, 0)), L = looks per cell per cycle
-    (valid native pixels in the block x --looksPerPixel), <> = mean over the cycles
-  5 n, the number of cycles with data
-Bands 1-4 are NaN where n < --minCount. Per-cycle arrays live in memory only. Resumable (frames with
+  1 mean gamma0 (linear)   2 sigma (sample std, linear)   3 CV = sigma / mean (raw: it includes
+  the speckle floor, about 1/sqrt(looks per cell))   4 n, the number of cycles with data
+Bands 1-3 are NaN where n < --minCount. Per-cycle arrays live in memory only. Resumable (frames with
 an output are skipped); <out>/frames.log records each frame's cycles and time.
 '''
 import argparse
@@ -37,7 +35,7 @@ from osgeo import gdal, osr
 from .globalGCOVTiles import loadGranules
 
 gdal.UseExceptions()
-BANDS = ['mean gamma0 (linear)', 'sigma (linear)', 'CV', 'CV, speckle floor removed', 'n (cycles)']
+BANDS = ['mean gamma0 (linear)', 'sigma (linear)', 'CV', 'n (cycles)']
 
 
 def httpSetup(cookieDir):
@@ -96,7 +94,7 @@ def reduceGranule(url, freq, pol, resM):
 
 
 def frameJob(job):
-    key, byCycle, out, resM, minCount, looksPerPixel, cookieDir = job
+    key, byCycle, out, resM, minCount, cookieDir = job
     if os.path.exists(out):
         return key, 0., 'skipped (done)'
     httpSetup(cookieDir)
@@ -134,7 +132,6 @@ def frameJob(job):
     S = np.zeros((ny, nx))
     S2 = np.zeros((ny, nx))
     N = np.zeros((ny, nx), 'i2')
-    invL = np.zeros((ny, nx))
     pix = samples[0][1][0][5]
     for cycle, parts in samples:
         s = np.zeros((ny, nx))
@@ -148,15 +145,13 @@ def frameJob(job):
         S += v
         S2 += v * v
         N += ok
-        invL += np.where(ok, 1. / (np.maximum(w, 1) * looksPerPixel), 0.)
     good = N >= minCount
     n = np.maximum(N, 1)
     mean = S / n
     var = np.maximum(S2 - n * mean * mean, 0.) / np.maximum(n - 1, 1)
     sigma = np.sqrt(var)
     cv = np.where(mean > 0, sigma / np.where(mean > 0, mean, 1), np.nan)
-    cvc = np.sqrt(np.maximum(cv * cv - invL / n, 0.))
-    stack = [np.where(good, a, np.nan).astype('f4') for a in (mean, sigma, cv, cvc)]
+    stack = [np.where(good, a, np.nan).astype('f4') for a in (mean, sigma, cv)]
     stack.append(np.where(N > 0, N, np.nan).astype('f4'))
     # crop to the cells with data (cycles' grids differ in extent; the union is mostly empty)
     rr, cc = np.nonzero((N > 0).any(1))[0], np.nonzero((N > 0).any(0))[0]
@@ -166,7 +161,7 @@ def frameJob(job):
     srs = osr.SpatialReference()
     srs.ImportFromEPSG(epsg0)
     tmp = out + '.tmp.tif'
-    d = gdal.GetDriverByName('GTiff').Create(tmp, nx, ny, 5, gdal.GDT_Float32,
+    d = gdal.GetDriverByName('GTiff').Create(tmp, nx, ny, len(BANDS), gdal.GDT_Float32,
                                              options=['TILED=YES', 'COMPRESS=DEFLATE', 'PREDICTOR=3'])
     d.SetGeoTransform((bx0 * resM, resM, 0., by0 * resM, 0., -resM))
     d.SetProjection(srs.ExportToWkt())
@@ -176,7 +171,7 @@ def frameJob(job):
         band.SetDescription(desc)
         band.WriteArray(a)
     d.SetMetadata({'cycles': ' '.join(c for c, _ in samples), 'native_pixel_m': str(pix),
-                   'looksPerPixel': str(looksPerPixel), 'minCount': str(minCount)})
+                   'minCount': str(minCount)})
     d = None
     os.replace(tmp, out)
     note = f'{len(samples)} cycles ({" ".join(c for c, _ in samples)}), {int(good.sum())} cells n>={minCount}'
@@ -192,8 +187,6 @@ def main():
     ap.add_argument('--out', required=True, help='directory for the per-frame statistics files')
     ap.add_argument('--resM', type=float, default=80., help='statistics cell size, m [80]')
     ap.add_argument('--minCount', type=int, default=3, help='minimum cycles for statistics [3]')
-    ap.add_argument('--looksPerPixel', type=float, default=1.,
-                    help='looks in one native GCOV pixel, for the speckle floor [1]')
     ap.add_argument('--frames', nargs='+', default=None, help='only these track_frame_mode keys')
     ap.add_argument('--nProc', type=int, default=8)
     args = ap.parse_args()
@@ -214,8 +207,8 @@ def main():
                 d, freq, pol = want[k]
                 chan = ('HH' if pol in ('SH', 'DH', 'QP') else 'VV')
                 stacks[k][g['cycle']].append((g['name'], g['url'], freq, chan))
-    jobs = [(k, dict(stacks[k]), f'{args.out}/{k}.tif', args.resM, args.minCount, args.looksPerPixel,
-             args.out) for k in sorted(stacks)]
+    jobs = [(k, dict(stacks[k]), f'{args.out}/{k}.tif', args.resM, args.minCount, args.out)
+            for k in sorted(stacks)]
     jobs.sort(key=lambda j: -sum(len(v) for v in j[1].values()))
     print(f'{len(jobs)} frames, {sum(sum(len(v) for v in j[1].values()) for j in jobs)} granules, '
           f'{args.nProc} processes -> {args.out}', flush=True)

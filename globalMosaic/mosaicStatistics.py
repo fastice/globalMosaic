@@ -7,11 +7,10 @@ of a backscatter tiling.
       --work /scratch/ianj/mosaics/stats30asc [--nProc 16] [--tiles ...]
 
 One geomosaic run per tile and layer: the tile's frame-statistics files (the frames the tiling
-lists for that tile) with `band:` = the layer and `weightBand:` 5 (n, cycles) for layers 1-4, so
+lists for that tile) with `band:` = the layer and `weightBand:` 4 (n, cycles) for layers 1-3, so
 overlapping frames are averaged weighted by their sample count; feathered with -fl as usual.
 Linear Float32 output (NaN = no data), cropped to the tile:
-  <work>/tiles/<layer>/<tile>.tif, layers mean (gamma0, linear), sigma, cv, cvc (speckle floor
-  removed), n. VRTs per layer: <work>/vrt/<layer>/{<tile>, global, cap_<name>}.vrt.
+  <work>/tiles/<layer>/<tile>.tif, layers mean (gamma0, linear), sigma, cv (raw), n. VRTs per layer: <work>/vrt/<layer>/{<tile>, global, cap_<name>}.vrt.
 Progress: <work>/quicklooks/progress.png (60S-60N and both polar views, of cv) every 5 minutes.
 Resumable: finished tiles are skipped. The frame files are kept (inputs for reruns).
 '''
@@ -32,7 +31,7 @@ from osgeo import gdal
 from .runGeomosaicTiles import tileGrid, log, Progress
 
 gdal.UseExceptions()
-LAYERS = {'mean': 1, 'sigma': 2, 'cv': 3, 'cvc': 4, 'n': 5}
+LAYERS = {'mean': 1, 'sigma': 2, 'cv': 3, 'n': 4}
 NODATA = -3000
 
 
@@ -60,7 +59,7 @@ def runJob(job):
         if os.path.exists(outs[L]):
             continue
         with open(f'{jd}/{L}.yaml', 'w') as fp:
-            fp.write(f'band: {band}\n' + ('weightBand: 5\n' if band != 5 else '') + 'files:\n')
+            fp.write(f'band: {band}\n' + ('weightBand: 4\n' if band != 4 else '') + 'files:\n')
             for f in files:
                 fp.write(f'  - {f}\n')
         cmd = [geomosaic, '-GTiff', '-ompThreads', '1', '-fl', str(grid['fl']), '-epsg', str(grid['epsg']),
@@ -115,7 +114,7 @@ def main():
     ap.add_argument('--tiles', nargs='+', default=None)
     ap.add_argument('--geomosaic', default='geomosaic')
     ap.add_argument('--googleEarth', default=None,
-                    help='also build Google Earth of these layers, e.g. "cv cvc" (zoom --zoom) [none]')
+                    help='also build Google Earth of these layers, e.g. "cv" (zoom --zoom) [none]')
     ap.add_argument('--zoom', default='0-9')
     ap.add_argument('--title', default=None, help='Google Earth name prefix [NISAR temporal statistics <work name>]')
     args = ap.parse_args()
@@ -173,7 +172,7 @@ def main():
         log(f'{L}: {len(latlon)} lat/lon tiles, {len(caps)} caps -> {vd}', summary)
     # Google Earth: grey stretch per layer, linear (CV 0-0.6, n 0-10)
     from .makeGoogleEarth import superoverlay
-    stretches = {'cv': (0., 0.6, 1.), 'cvc': (0., 0.6, 1.), 'n': (0., 10., 1.)}
+    stretches = {'cv': (0., 0.6, 1.), 'n': (0., 10., 1.)}
     title = args.title or f'NISAR temporal statistics {os.path.basename(work)}'
     for L in (args.googleEarth or '').split():
         vd = f'{work}/vrt/{L}'
@@ -181,7 +180,7 @@ def main():
         if not srcs:
             continue
         if L not in stretches:
-            log(f'Google Earth {L}: no linear stretch defined (cv, cvc, n); skipped', summary)
+            log(f'Google Earth {L}: no linear stretch defined (cv, n); skipped', summary)
             continue
         lo, hi, sc = stretches[L]
         rc = superoverlay(srcs, args.res, f'{work}/googleEarth/{L}', args.zoom, dbMin=lo, dbMax=hi,

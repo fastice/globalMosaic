@@ -1,8 +1,7 @@
 #!/bin/bash
-# Temporal backscatter statistics (mean, sigma, CV, speckle-corrected CV, n) of every ascending
+# Temporal backscatter statistics (mean, sigma, CV, n) of every ascending
 # cycle from 2026-06-17 (cycles 023-031), per (track, frame) of the ascending tiling, then the
-# global mosaic with geomosaic -geo (80 m caps, 2.4" lat/lon), then Google Earth zoom 0-9 of cv and
-# cvc. In the background; log: <work>/run.log. Resumable: finished frames and tiles are skipped.
+# global mosaic with geomosaic -geo (80 m caps, 2.4" lat/lon), then Google Earth zoom 0-9 of cv. In the background; log: <work>/run.log. Resumable: finished frames and tiles are skipped.
 # The per-frame statistics (<work>/frames) are kept, for rerunning the mosaic.
 #   bash test/runStatistics.sh                      # ascending  -> /scratch/ianj/mosaics/stats30asc
 #   DIR=descending bash test/runStatistics.sh       # descending -> /scratch/ianj/mosaics/stats30desc
@@ -19,8 +18,8 @@ nohup bash -c "
     python3 -m globalMosaic.frameStatistics cycle30/$DIR --catalogues $CATS --out $WORK/frames --nProc ${NPROC:-16}
     echo \"=== frame statistics done \$(date)\"
     python3 -m globalMosaic.mosaicStatistics cycle30/$DIR --frames $WORK/frames --work $WORK --nProc ${NPROC:-16} \
-        --googleEarth 'cv cvc' --zoom ${ZOOM:-0-9} --title "NISAR temporal statistics, $DIR, 2026-06-17 to cycle 31"
+        --googleEarth 'cv' --zoom ${ZOOM:-0-9} --title "NISAR temporal statistics, $DIR, 2026-06-17 to cycle 31"
     tar -cf $WORK/googleEarth.tar -C $WORK --exclude='googleEarth/*/stage' googleEarth
-    echo \"=== all done \$(date): $WORK/googleEarth/cv/doc.kml, cvc/doc.kml; archive $WORK/googleEarth.tar\"
+    echo \"=== all done \$(date): $WORK/googleEarth/cv/doc.kml, archive $WORK/googleEarth.tar\"
 " > $WORK/run.log 2>&1 &
 echo "started pid $!; log: $WORK/run.log"
