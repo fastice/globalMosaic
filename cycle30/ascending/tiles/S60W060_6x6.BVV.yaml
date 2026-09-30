@@ -1,0 +1,6 @@
+# S60W060_6x6: 1 granules, frequency B
+polarization: VV
+frequency: B
+useMask: true
+files:
+  - NISAR_L2_PR_GCOV_023_118_A_147_0005_NASV_A_20260622T101154_20260622T101213_P05023_N_P_J_001.h5

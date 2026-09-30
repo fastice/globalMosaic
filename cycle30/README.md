@@ -4,7 +4,8 @@
 |---|---|
 | `catalogue.geojson` | cycle 030 GCOV granules (ASF search), `L2_PR`, one per scene |
 | `catalogue029.geojson`, `catalogue031.geojson`, `catalogue027.geojson` | cycles 029, 031 and 027 (08-10; only 4247 granules so far), used only to fill what 030 leaves uncovered, in that order. All four catalogues are NISAR_L2_GCOV_PROVISIONAL_V1, CRID P05023 |
-| `validFootprints*.geojson` | `scanMasks` valid-data (mask 1..254) footprints of the partial frames; some are entirely mask 0 (partially focused) and cover nothing |
+| `validFootprints*.geojson` | `scanMasks` valid-data (mask 1..254) footprints of the partial frames; some are entirely mask 0 (partially focused) and cover nothing. `validFootprintsFill.geojson`: every granule the 09-30 fill added that had not been scanned (1696, all frames) |
+| `notAcquiredAscending/` | land no ascending granule of cycles 023-031 covers (`notAcquired`): the list for the acquisition planners |
 | `both/`, `descending/` | cycle 030 only (acquisition footprints) |
 | `ascending/` | cycle 030 + 029/031 fill, valid footprints; built keeping the earlier ascending picks (`--keepFrom`), so only tiles with gaps changed |
 
@@ -33,3 +34,15 @@ tiling of 7c3546a; the cap does not change. Uncovered land 0.5%.
 
 Uncovered land: 2.5% (cycle 030 only) -> 0.7% (with fill): the Antarctic pole hole beyond ascending
 reach, a sliver near 85S 180, and 5 MHz stripes in the Sahara.
+
+Rebuilt 2026-09-30 (fill from the finished z11 run): gapReport on the z11 tiles (--cells 1200, ~550 m)
+-> no-data areas clipped to Natural Earth 10 m land + lakes + ice shelves + the Caspian, buffered
+0.02 deg (~2 km, for coastal slivers; ascending/fillGaps-z11.geojson) -> globalGCOVTiles --keepFrom
+<previous> --fillGaps with fill catalogues 029, 031, 027, 028, 026, 025, 024, 023 (in that order)
+and valid footprints of every candidate (the 1696 new ones scanned: 34 all mask 0, 390 granules
+dropped in all). 506 tiles gained 3327 granules; 552 of 939 geomosaic jobs change (incl. the
+Antarctic cap). By footprints the land gap of the lat/lon tiles goes 1.06 -> 0.27 M km2; what is
+left is not acquired ascending (northern Thailand/Laos, the Sahara stripes, western Aleutians,
+Faroe, Shetland, Aldabra, ... see notAcquiredAscending/) or acquired only as partially focused
+data (mask 0): Costa Brava, Ishigaki, Miyako, Okinawa. Uncovered land (coverageMaps) 0.50 M km2
+(0.3%), half of it the Antarctic pole hole.

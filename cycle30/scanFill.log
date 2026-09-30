@@ -1,0 +1,81 @@
+1696 granules to scan (0 already done)
+50/1696 scanned
+100/1696 scanned
+150/1696 scanned
+200/1696 scanned
+250/1696 scanned
+300/1696 scanned
+350/1696 scanned
+400/1696 scanned
+450/1696 scanned
+500/1696 scanned
+550/1696 scanned
+600/1696 scanned
+650/1696 scanned
+700/1696 scanned
+750/1696 scanned
+800/1696 scanned
+850/1696 scanned
+900/1696 scanned
+950/1696 scanned
+1000/1696 scanned
+Warning 1: HTTP error code: 503 - https://nisar.asf.earthdatacloud.nasa.gov/NISAR/NISAR_L2_GCOV_PROVISIONAL_V1/NISAR_L2_PR_GCOV_029_071_A_009_2005_DHDH_M_20260830T023830_20260830T023905_P05023_N_F_J_001/NISAR_L2_PR_GCOV_029_071_A_009_2005_DHDH_M_20260830T023830_20260830T023905_P05023_N_F_J_001.h5. Retrying again in 10.0 secs
+1050/1696 scanned
+1100/1696 scanned
+1150/1696 scanned
+1200/1696 scanned
+Warning 1: HTTP error code: 503 - https://nisar.asf.earthdatacloud.nasa.gov/NISAR/NISAR_L2_GCOV_PROVISIONAL_V1/NISAR_L2_PR_GCOV_028_060_A_025_4005_DHDH_A_20260817T082904_20260817T082921_P05023_N_P_J_001/NISAR_L2_PR_GCOV_028_060_A_025_4005_DHDH_A_20260817T082904_20260817T082921_P05023_N_P_J_001.h5. Retrying again in 10.0 secs
+1250/1696 scanned
+1300/1696 scanned
+1350/1696 scanned
+1400/1696 scanned
+1450/1696 scanned
+HDF5-DIAG: Error detected in HDF5 (1.14.3) thread 1:
+  #000: H5D.c line 1061 in H5Dread(): can't synchronously read data
+    major: Dataset
+    minor: Read failed
+  #001: H5D.c line 1008 in H5D__read_api_common(): can't read data
+    major: Dataset
+    minor: Read failed
+  #002: H5VLcallback.c line 2092 in H5VL_dataset_read_direct(): dataset read failed
+    major: Virtual Object Layer
+    minor: Read failed
+  #003: H5VLcallback.c line 2048 in H5VL__dataset_read(): dataset read failed
+    major: Virtual Object Layer
+    minor: Read failed
+  #004: H5VLnative_dataset.c line 373 in H5VL__native_dataset_read(): can't read data
+    major: Dataset
+    minor: Read failed
+  #005: H5Dio.c line 401 in H5D__read(): can't read data
+    major: Dataset
+    minor: Read failed
+  #006: H5Dchunk.c line 2919 in H5D__chunk_read(): unable to read raw data chunk
+    major: Low-level I/O
+    minor: Read failed
+  #007: H5Dchunk.c line 4534 in H5D__chunk_lock(): unable to read raw data chunk
+    major: Low-level I/O
+    minor: Read failed
+  #008: H5Fio.c line 99 in H5F_shared_block_read(): read through page buffer failed
+    major: Low-level I/O
+    minor: Read failed
+  #009: H5PB.c line 694 in H5PB_read(): read through metadata accumulator failed
+    major: Page Buffering
+    minor: Read failed
+  #010: H5Faccum.c line 247 in H5F__accum_read(): driver read request failed
+    major: Low-level I/O
+    minor: Read failed
+  #011: H5FDint.c line 259 in H5FD_read(): driver read request failed
+    major: Virtual File Layer
+    minor: Read failed
+Warning 1: HTTP error code: 503 - https://nisar.asf.earthdatacloud.nasa.gov/NISAR/NISAR_L2_GCOV_PROVISIONAL_V1/NISAR_L2_PR_GCOV_028_062_A_008_4005_DHDH_A_20260817T113928_20260817T113934_P05023_N_P_J_001/NISAR_L2_PR_GCOV_028_062_A_008_4005_DHDH_A_20260817T113928_20260817T113934_P05023_N_P_J_001.h5. Retrying again in 10.0 secs
+Warning 1: HTTP error code: 503 - https://nisar.asf.earthdatacloud.nasa.gov/NISAR/NISAR_L2_GCOV_PROVISIONAL_V1/NISAR_L2_PR_GCOV_029_033_A_009_4005_DHDH_A_20260827T112254_20260827T112328_P05023_N_F_J_001/NISAR_L2_PR_GCOV_029_033_A_009_4005_DHDH_A_20260827T112254_20260827T112328_P05023_N_F_J_001.h5. Retrying again in 10.0 secs
+Traceback (most recent call last):
+  File "/home/ian/miniforge3/lib/python3.10/runpy.py", line 196, in _run_module_as_main
+    return _run_code(code, main_globals, None,
+  File "/home/ian/miniforge3/lib/python3.10/runpy.py", line 86, in _run_code
+    exec(code, run_globals)
+  File "/home/ian/PycharmProjects/packages/globalMosaic/globalMosaic/scanMasks.py", line 123, in <module>
+    sys.exit(main())
+  File "/home/ian/PycharmProjects/packages/globalMosaic/globalMosaic/scanMasks.py", line 110, in main
+    done[name] = {'type': 'Feature', 'properties': {'name': name, 'validFrac': round(frac, 4)},
+TypeError: type NoneType doesn't define __round__ method

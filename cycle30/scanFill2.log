@@ -1,0 +1,8 @@
+246 granules to scan (1450 already done)
+50/246 scanned
+Warning 1: HTTP error code: 503 - https://nisar.asf.earthdatacloud.nasa.gov/NISAR/NISAR_L2_GCOV_PROVISIONAL_V1/NISAR_L2_PR_GCOV_029_149_A_020_4005_DHDH_A_20260904T123539_20260904T123613_P05023_N_F_J_001/NISAR_L2_PR_GCOV_029_149_A_020_4005_DHDH_A_20260904T123539_20260904T123613_P05023_N_F_J_001.h5. Retrying again in 10.0 secs
+100/246 scanned
+150/246 scanned
+200/246 scanned
+246/246 scanned
+done: 1696 granules; all-invalid 34, < 50% valid 179
