@@ -145,6 +145,8 @@ def frameJob(job):
         S += v
         S2 += v * v
         N += ok
+    if not N.any():
+        return key, time.time() - t0, f'no valid data ({len(samples)} cycles read, all masked)'
     good = N >= minCount
     n = np.maximum(N, 1)
     mean = S / n
@@ -178,6 +180,14 @@ def frameJob(job):
     if failed:
         note += f'; {len(failed)} FAILED: ' + '; '.join(failed[:2])
     return key, time.time() - t0, note
+
+
+def safeFrameJob(job):
+    ''' frameJob, but one bad frame is logged as FAILED instead of stopping the whole run. '''
+    try:
+        return frameJob(job)
+    except Exception as e:
+        return job[0], 0., f'FAILED {type(e).__name__}: {str(e)[:150]}'
 
 
 def main():
@@ -214,7 +224,7 @@ def main():
           f'{args.nProc} processes -> {args.out}', flush=True)
     log = open(f'{args.out}/frames.log', 'a')
     with concurrent.futures.ProcessPoolExecutor(args.nProc) as pool:
-        for i, (k, sec, note) in enumerate(pool.map(frameJob, jobs), 1):
+        for i, (k, sec, note) in enumerate(pool.map(safeFrameJob, jobs), 1):
             line = f'{time.strftime("%m-%d %H:%M:%S")} [{i}/{len(jobs)}] {k}: {sec / 60:.1f} min {note}'
             print(line, flush=True)
             log.write(line + '\n')
