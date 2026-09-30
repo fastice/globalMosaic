@@ -69,7 +69,7 @@ def scanOne(name, url, stride):
         geom, frac = validFootprint(url, stride)
         return name, geom, frac, None
     except Exception as e:
-        return name, None, None, str(e)[:200]
+        return name, None, None, str(e)[:200] or type(e).__name__
 
 
 def main():
@@ -104,7 +104,7 @@ def main():
         futs = [pool.submit(scanOne, p['name'], p['url'], args.stride) for p in todo]
         for k, fut in enumerate(concurrent.futures.as_completed(futs), 1):
             name, geom, frac, err = fut.result()
-            if err:
+            if err is not None:
                 print(f'  {name}: ERROR {err}', flush=True)
                 continue
             done[name] = {'type': 'Feature', 'properties': {'name': name, 'validFrac': round(frac, 4)},
