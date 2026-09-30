@@ -141,6 +141,8 @@ def liftOcean(tree, altitude=10., processes=16, undo=False):
     kmls = sorted(glob.glob(f'{tree}/[0-9]*/*/*.kml'))
     print(f'ocean at sea level: {len(kmls)} tile KMLs under {tree}', flush=True)
     counts = {}
+    if not undo:
+        landParts()             # download the coastline once here: workers fetching it at once corrupt it
     with ProcessPoolExecutor(processes, initializer=None if undo else initWorker) as pool:
         results = pool.map(undoTile, kmls, chunksize=256) if undo else \
             pool.map(doTile, [(k, altitude) for k in kmls], chunksize=256)
