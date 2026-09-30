@@ -5,8 +5,21 @@
 # The per-frame statistics (<work>/frames) are kept, for rerunning the mosaic.
 #   bash test/runStatistics.sh                      # ascending  -> /scratch/ianj/mosaics/stats30asc
 #   DIR=descending bash test/runStatistics.sh       # descending -> /scratch/ianj/mosaics/stats30desc
+#   bash test/runStatistics.sh -kill               # stop a running one (restart with the plain command)
 # Needs a geomosaic with -geo (installGeomosaic once the helheim change is pushed).
 set -euo pipefail
+if [[ "${1:-}" == -kill || "${1:-}" == --kill ]]; then
+    # the background wrapper, the python drivers and their workers, and geomosaic -geo jobs
+    # (not gdal2tiles: another run's Google Earth build may be using it)
+    pat='globalMosaic\.(frameStatistics|mosaicStatistics)|geomosaic .*-geo '
+    pids=$(pgrep -f "$pat" | grep -vx -e $$ -e $PPID || true)
+    [ -n "$pids" ] && kill $pids
+    sleep 3
+    left=$( (pgrep -f "$pat" || true) | (grep -vx -e $$ -e $PPID || true) | wc -l)
+    n=$(echo $pids | wc -w)
+    echo "stopped $n processes; $left still running. Finished frames and tiles are kept: rerun to resume."
+    exit 0
+fi
 cd "$(dirname "$0")/.."
 DIR=${DIR:-ascending}
 case $DIR in ascending) TAG=asc ;; descending) TAG=desc ;; *) echo "DIR must be ascending or descending"; exit 1 ;; esac
