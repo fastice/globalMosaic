@@ -7,8 +7,9 @@ Temporal backscatter statistics per (track, frame) from a stack of NISAR GCOV cy
 
 Frames: every (track, frame, mode) among the granules the tiling selected, so the statistics cover
 what the backscatter mosaic covers; direction and channel as the tiling chose them (file names).
-For each frame, every cycle's granule(s) of that track/frame/mode is read over https with large
-reads -- only the power layer used by the tiling (HHHH, or VVVV) and the mask. Valid samples
+For each frame, every cycle's granule(s) of that track/frame/mode is read over https -- only the
+chunks of the power layer used by the tiling (HHHH, or VVVV) and of the mask (rangeReader: a 40 MHz
+granule costs 1.7 GB instead of the 5.4 GB GDAL's read-ahead fetched). Valid samples
 (mask 1..254, finite, > 0) are averaged in LINEAR power over --resM blocks laid on multiples of
 --resM in the frame's CRS, so every cycle's blocks coincide (GCOV origins are snapped to the
 posting). Granules of one cycle (a partial plus a full frame) are merged into that cycle's one
@@ -58,12 +59,14 @@ def frameKey(name):
 def reduceGranule(url, freq, pol, resM):
     ''' One granule reduced to --resM blocks on the lattice of multiples of resM:
     (column of the first block on the lattice, row of the first block, epsg, mean power, valid
-    native pixels per block, native spacing). '''
-    g = gdal.OpenEx('/vsicurl/' + url, gdal.OF_MULTIDIM_RASTER).GetRootGroup() \
-        .OpenGroupFromFullname(f'/science/LSAR/GCOV/grids/frequency{freq}')
-    xs = g.OpenMDArray('xCoordinates').ReadAsArray()
-    ys = g.OpenMDArray('yCoordinates').ReadAsArray()
-    epsg = int(g.OpenMDArray('projection').GetAttribute('epsg_code').Read())
+    native pixels per block, native spacing). Reads only the power layer's and the mask's chunks
+    (rangeReader), not the rest of the file. '''
+    import h5py
+    from .rangeReader import RangeFile, chunkIndex, rangesFor
+    rf = RangeFile(url)
+    g = h5py.File(rf, 'r')[f'/science/LSAR/GCOV/grids/frequency{freq}']
+    xs, ys = g['xCoordinates'][()], g['yCoordinates'][()]
+    epsg = int(np.asarray(g['projection'].attrs['epsg_code']).ravel()[0])
     dx, dy = float(xs[1] - xs[0]), float(ys[1] - ys[0])      # dy < 0
     k = int(round(resM / abs(dx)))
     if abs(k * abs(dx) - resM) > 1e-6 * resM:
@@ -77,15 +80,18 @@ def reduceGranule(url, freq, pol, resM):
     nbx, nby = (len(xs) - c0) // k, (len(ys) - r0) // k
     if nbx < 1 or nby < 1:
         return None
-    P, M = g.OpenMDArray(f'{pol}{pol}'), g.OpenMDArray('mask')
+    P, M = g[f'{pol}{pol}'], g['mask']
+    iP, iM = chunkIndex(P), chunkIndex(M)
     s = np.zeros((nby, nbx))
     w = np.zeros((nby, nbx), 'i4')
     step = max(1, 2048 // k)                                  # block rows per full-width read
     for b0 in range(0, nby, step):
         b1 = min(b0 + step, nby)
-        view = f'[{r0 + b0 * k}:{r0 + b1 * k},{c0}:{c0 + nbx * k}]'
-        p = P.GetView(view).ReadAsArray()
-        m = M.GetView(view).ReadAsArray()
+        ra, rb, ca, cb = r0 + b0 * k, r0 + b1 * k, c0, c0 + nbx * k
+        rf.prefetch(rangesFor(iP, P.chunks, ra, rb, ca, cb) + rangesFor(iM, M.chunks, ra, rb, ca, cb))
+        p = P[ra:rb, ca:cb]
+        m = M[ra:rb, ca:cb]
+        rf.drop()
         ok = np.isfinite(p) & (p > 0) & (m > 0) & (m < 255)
         nb = b1 - b0
         s[b0:b1] = np.where(ok, p, 0.).reshape(nb, k, nbx, k).sum((1, 3), dtype='f8')

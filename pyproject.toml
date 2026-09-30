@@ -23,7 +23,9 @@ dependencies = [
     "matplotlib",
     "asf_search",
     "GDAL",
-    "PyYAML"
+    "PyYAML",
+    "h5py",
+    "requests"
 ]
 
 [tool.setuptools]
