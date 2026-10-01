@@ -15,6 +15,6 @@ mkdir -p $WORK
     grep -h 'read+average' $WORK/jobs/*/log
     makeQuickLook $WORK --processes ${NPROC:-24}
     time makeGoogleEarth $WORK --out $WORK/googleEarth --title "NISAR gamma0 smoke test $(basename $WORK)" --processes ${NPROC:-24} --zoom ${ZOOM:-0-9}
-    tar -cf $WORK/googleEarth.tar -C $WORK --exclude=googleEarth/stage googleEarth
+    tar -cf $WORK/googleEarth.tar -C $WORK --exclude='*/stage' --exclude='googleEarth/src1[01]' googleEarth
     echo "=== all done $(date): open $WORK/googleEarth/doc.kml; archive $WORK/googleEarth.tar"
 } 2>&1 | tee $WORK/run.log
