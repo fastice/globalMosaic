@@ -15,11 +15,13 @@ granule costs 1.7 GB instead of the 5.4 GB GDAL's read-ahead fetched). Valid sam
 posting). Granules of one cycle (a partial plus a full frame) are merged into that cycle's one
 sample. Across cycles: sum, sum of squares, count per cell.
 
-Output <out>/<track>_<frame>_<mode>.tif, the frame's CRS at --resM, Float32, NaN = no data:
+Output <out>/<track>_<frame>_<mode>.tif (co-pol: HH, or VV) and, for dual- and quad-pol frames,
+<out>/<track>_<frame>_<mode>.cross.tif (cross-pol: HV for dual-H and quad, VH for dual-V; one read
+of each granule serves both, sharing the mask), the frame's CRS at --resM, Float32, NaN = no data:
   1 mean gamma0 (linear)   2 sigma (sample std, linear)   3 CV = sigma / mean (raw: it includes
   the speckle floor, about 1/sqrt(looks per cell))   4 n, the number of cycles with data
-Bands 1-3 are NaN where n < --minCount. Per-cycle arrays live in memory only. Resumable (frames with
-an output are skipped); <out>/frames.log records each frame's cycles and time.
+Bands 1-3 are NaN where n < --minCount; metadata 'polarization' (e.g. HVHV). Per-cycle arrays live in
+memory only. Resumable per layer (a frame with its co-pol file only reads the cross-pol layer); <out>/frames.log records each frame's cycles and time.
 '''
 import argparse
 import collections
@@ -56,11 +58,12 @@ def frameKey(name):
     return f'{f[5]}_{f[7]}_{f[8]}'             # track, frame, mode
 
 
-def reduceGranule(url, freq, pol, resM):
-    ''' One granule reduced to --resM blocks on the lattice of multiples of resM:
-    (column of the first block on the lattice, row of the first block, epsg, mean power, valid
-    native pixels per block, native spacing). Reads only the power layer's and the mask's chunks
-    (rangeReader), not the rest of the file. '''
+def reduceGranule(url, freq, chans, resM):
+    ''' One granule reduced to --resM blocks on the lattice of multiples of resM, for each power
+    layer in chans (e.g. ['HH', 'HV'], read with one shared mask; a layer the granule lacks is left
+    out): (column of the first block on the lattice, row of the first block, epsg,
+    {chan: (mean power sums, valid native pixels per block)}, native spacing). Reads only those
+    layers' and the mask's chunks (rangeReader), not the rest of the file. '''
     import h5py
     from .rangeReader import RangeFile, chunkIndex, rangesFor
     rf = RangeFile(url)
@@ -80,69 +83,52 @@ def reduceGranule(url, freq, pol, resM):
     nbx, nby = (len(xs) - c0) // k, (len(ys) - r0) // k
     if nbx < 1 or nby < 1:
         return None
-    P, M = g[f'{pol}{pol}'], g['mask']
-    iP, iM = chunkIndex(P), chunkIndex(M)
-    s = np.zeros((nby, nbx))
-    w = np.zeros((nby, nbx), 'i4')
+    P = {c: g[f'{c}{c}'] for c in chans if f'{c}{c}' in g}
+    if not P:
+        return None
+    M = g['mask']
+    idx = {c: chunkIndex(a) for c, a in P.items()}
+    iM = chunkIndex(M)
+    out = {c: (np.zeros((nby, nbx)), np.zeros((nby, nbx), 'i4')) for c in P}
     step = max(1, 2048 // k)                                  # block rows per full-width read
     for b0 in range(0, nby, step):
         b1 = min(b0 + step, nby)
         ra, rb, ca, cb = r0 + b0 * k, r0 + b1 * k, c0, c0 + nbx * k
-        rf.prefetch(rangesFor(iP, P.chunks, ra, rb, ca, cb) + rangesFor(iM, M.chunks, ra, rb, ca, cb))
-        p = P[ra:rb, ca:cb]
+        ranges = rangesFor(iM, M.chunks, ra, rb, ca, cb)
+        for c, a in P.items():
+            ranges += rangesFor(idx[c], a.chunks, ra, rb, ca, cb)
+        rf.prefetch(ranges)
         m = M[ra:rb, ca:cb]
-        rf.drop()
-        ok = np.isfinite(p) & (p > 0) & (m > 0) & (m < 255)
+        inMask = (m > 0) & (m < 255)
         nb = b1 - b0
-        s[b0:b1] = np.where(ok, p, 0.).reshape(nb, k, nbx, k).sum((1, 3), dtype='f8')
-        w[b0:b1] = ok.reshape(nb, k, nbx, k).sum((1, 3))
-    return bx, by, epsg, s, w, abs(dx)
+        for c, a in P.items():
+            p = a[ra:rb, ca:cb]
+            ok = inMask & np.isfinite(p) & (p > 0)
+            s, w = out[c]
+            s[b0:b1] = np.where(ok, p, 0.).reshape(nb, k, nbx, k).sum((1, 3), dtype='f8')
+            w[b0:b1] = ok.reshape(nb, k, nbx, k).sum((1, 3))
+        rf.drop()
+    return bx, by, epsg, out, abs(dx)
 
 
-def frameJob(job):
-    key, byCycle, out, resM, minCount, cookieDir = job
-    if os.path.exists(out):
-        return key, 0., 'skipped (done)'
-    httpSetup(cookieDir)
-    t0 = time.time()
-    samples, failed, epsg0 = [], [], None
-    for cycle in sorted(byCycle):
-        # one sample per cycle: merge that cycle's granules (block sums and counts add up)
-        parts = []
-        for name, url, freq, pol in byCycle[cycle]:
-            for attempt in range(3):
-                try:
-                    r = reduceGranule(url, freq, pol, resM)
-                    break
-                except Exception as e:
-                    err = str(e)[:150]
-                    time.sleep(15)
-            else:
-                failed.append(f'{name[17:47]}: {err}')
-                continue
-            if r is not None:
-                parts.append(r)
-        if not parts:
-            continue
-        epsg0 = epsg0 or parts[0][2]
-        parts = [p for p in parts if p[2] == epsg0]
-        samples.append((cycle, parts))
-    if not samples:
-        return key, time.time() - t0, 'no data' + (f'; FAILED {failed[:2]}' if failed else '')
+def writeStats(out, samples, resM, minCount, chan):
+    ''' Temporal statistics of one layer from its per-cycle samples [(cycle, [(bx, by, (s, w))])]
+    to <out> (4 bands, see the module doc). Returns (cycles, cells with n >= minCount), or None when
+    no cell has valid data. '''
+    epsg0, pix = samples[0][2], samples[0][3]
     # frame lattice extent = union of every part
-    bx0 = min(p[0] for _, ps in samples for p in ps)
-    by0 = max(p[1] for _, ps in samples for p in ps)
-    bx1 = max(p[0] + p[3].shape[1] for _, ps in samples for p in ps)
-    by1 = min(p[1] - p[3].shape[0] for _, ps in samples for p in ps)
+    bx0 = min(p[0] for _, ps, _, _ in samples for p in ps)
+    by0 = max(p[1] for _, ps, _, _ in samples for p in ps)
+    bx1 = max(p[0] + p[2][0].shape[1] for _, ps, _, _ in samples for p in ps)
+    by1 = min(p[1] - p[2][0].shape[0] for _, ps, _, _ in samples for p in ps)
     nx, ny = bx1 - bx0, by0 - by1
     S = np.zeros((ny, nx))
     S2 = np.zeros((ny, nx))
     N = np.zeros((ny, nx), 'i2')
-    pix = samples[0][1][0][5]
-    for cycle, parts in samples:
+    for cycle, parts, _, _ in samples:
         s = np.zeros((ny, nx))
         w = np.zeros((ny, nx))
-        for bx, by, _, ps, pw, _ in parts:
+        for bx, by, (ps, pw) in parts:
             i, j = by0 - by, bx - bx0
             s[i:i + ps.shape[0], j:j + ps.shape[1]] += ps
             w[i:i + ps.shape[0], j:j + ps.shape[1]] += pw
@@ -152,7 +138,7 @@ def frameJob(job):
         S2 += v * v
         N += ok
     if not N.any():
-        return key, time.time() - t0, f'no valid data ({len(samples)} cycles read, all masked)'
+        return None
     good = N >= minCount
     n = np.maximum(N, 1)
     mean = S / n
@@ -178,11 +164,60 @@ def frameJob(job):
         band.SetNoDataValue(float('nan'))
         band.SetDescription(desc)
         band.WriteArray(a)
-    d.SetMetadata({'cycles': ' '.join(c for c, _ in samples), 'native_pixel_m': str(pix),
-                   'minCount': str(minCount)})
+    cycles = [c for c, _, _, _ in samples]
+    d.SetMetadata({'cycles': ' '.join(cycles), 'native_pixel_m': str(pix), 'minCount': str(minCount),
+                   'polarization': f'{chan}{chan}'})
     d = None
     os.replace(tmp, out)
-    note = f'{len(samples)} cycles ({" ".join(c for c, _ in samples)}), {int(good.sum())} cells n>={minCount}'
+    return cycles, int(good.sum())
+
+
+def frameJob(job):
+    ''' One frame: per layer (co-pol HH/VV -> <key>.tif, cross-pol HV/VH -> <key>.cross.tif) the
+    statistics over cycles; only layers without an output yet are read. '''
+    key, byCycle, outs, chans, resM, minCount, cookieDir = job
+    todo = {L: c for L, c in chans.items() if c and not os.path.exists(outs[L])}
+    if not todo:
+        return key, 0., 'skipped (done)'
+    httpSetup(cookieDir)
+    t0 = time.time()
+    samples = {L: [] for L in todo}
+    failed, epsg0 = [], None
+    for cycle in sorted(byCycle):
+        # one sample per cycle: merge that cycle's granules (block sums and counts add up)
+        parts = []
+        for name, url, freq in byCycle[cycle]:
+            for attempt in range(3):
+                try:
+                    r = reduceGranule(url, freq, list(todo.values()), resM)
+                    break
+                except Exception as e:
+                    err = str(e)[:150]
+                    time.sleep(15)
+            else:
+                failed.append(f'{name[17:47]}: {err}')
+                continue
+            if r is not None:
+                parts.append(r)
+        if not parts:
+            continue
+        epsg0 = epsg0 or parts[0][2]
+        parts = [p for p in parts if p[2] == epsg0]
+        for L, c in todo.items():
+            ps = [(bx, by, layers[c]) for bx, by, _, layers, _ in parts if c in layers]
+            if ps:
+                samples[L].append((cycle, ps, epsg0, parts[0][4]))
+    notes = []
+    for L, c in todo.items():
+        if not samples[L]:
+            notes.append(f'{L} {c}{c}: no data')
+            continue
+        r = writeStats(outs[L], samples[L], resM, minCount, c)
+        if r is None:
+            notes.append(f'{L} {c}{c}: no valid data ({len(samples[L])} cycles read, all masked)')
+        else:
+            notes.append(f'{L} {c}{c}: {len(r[0])} cycles ({" ".join(r[0])}), {r[1]} cells n>={minCount}')
+    note = '; '.join(notes)
     if failed:
         note += f'; {len(failed)} FAILED: ' + '; '.join(failed[:2])
     return key, time.time() - t0, note
@@ -205,6 +240,8 @@ def main():
     ap.add_argument('--minCount', type=int, default=3, help='minimum cycles for statistics [3]')
     ap.add_argument('--frames', nargs='+', default=None, help='only these track_frame_mode keys')
     ap.add_argument('--nProc', type=int, default=8)
+    ap.add_argument('--layers', nargs='+', choices=['co', 'cross'], default=['co', 'cross'],
+                    help='co-pol (HH, or VV) and/or cross-pol (HV for dual-H/quad, VH for dual-V) [both]')
     args = ap.parse_args()
     os.makedirs(args.out, exist_ok=True)
     # frames (and the channel) the tiling uses
@@ -220,11 +257,16 @@ def main():
         for g in loadGranules(cat, allowV=True):
             k = frameKey(g['name'])
             if k in want and g['direction'] == want[k][0]:
-                d, freq, pol = want[k]
-                chan = ('HH' if pol in ('SH', 'DH', 'QP') else 'VV')
-                stacks[k][g['cycle']].append((g['name'], g['url'], freq, chan))
-    jobs = [(k, dict(stacks[k]), f'{args.out}/{k}.tif', args.resM, args.minCount, args.out)
-            for k in sorted(stacks)]
+                stacks[k][g['cycle']].append((g['name'], g['url'], want[k][1]))
+    jobs = []
+    for k in sorted(stacks):
+        pol = want[k][2]
+        chans = {'co': 'HH' if pol in ('SH', 'DH', 'QP') else 'VV',
+                 'cross': {'DH': 'HV', 'QP': 'HV', 'DV': 'VH'}.get(pol) if 'cross' in args.layers else None}
+        if 'co' not in args.layers:
+            chans['co'] = None
+        jobs.append((k, dict(stacks[k]), {'co': f'{args.out}/{k}.tif', 'cross': f'{args.out}/{k}.cross.tif'},
+                     chans, args.resM, args.minCount, args.out))
     jobs.sort(key=lambda j: -sum(len(v) for v in j[1].values()))
     print(f'{len(jobs)} frames, {sum(sum(len(v) for v in j[1].values()) for j in jobs)} granules, '
           f'{args.nProc} processes -> {args.out}', flush=True)

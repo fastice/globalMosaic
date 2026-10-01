@@ -1,8 +1,9 @@
 #!/bin/bash
-# Temporal backscatter statistics (mean, sigma, CV, n) of every ascending
+# Temporal backscatter statistics (mean, sigma, CV, n), co-pol and cross-pol, of every ascending
 # cycle from 2026-06-17 (cycles 023-031), per (track, frame) of the ascending tiling, then the
 # global mosaic with geomosaic -geo (80 m caps, 2.4" lat/lon), then Google Earth zoom 0-9 of cv. In the background; log: <work>/run.log. Resumable: finished frames and tiles are skipped.
-# The per-frame statistics (<work>/frames) are kept, for rerunning the mosaic.
+# The per-frame statistics (<work>/frames: <frame>.tif co-pol, <frame>.cross.tif HV/VH) are kept,
+# for rerunning the mosaic. Mosaics: co-pol in <work>, cross-pol in <work>_cross.
 #   bash test/runStatistics.sh                      # ascending  -> /scratch/ianj/mosaics/stats30asc
 #   DIR=descending bash test/runStatistics.sh       # descending -> /scratch/ianj/mosaics/stats30desc
 #   bash test/runStatistics.sh -kill               # stop a running one (restart with the plain command)
@@ -30,9 +31,15 @@ nohup bash -c "
     set -e
     python3 -m globalMosaic.frameStatistics cycle30/$DIR --catalogues $CATS --out $WORK/frames --nProc ${NPROC:-16}
     echo \"=== frame statistics done \$(date)\"
-    python3 -m globalMosaic.mosaicStatistics cycle30/$DIR --frames $WORK/frames --work $WORK --nProc ${NPROC:-16} \
-        --googleEarth 'cv' --zoom ${ZOOM:-0-9} --title "NISAR temporal statistics, $DIR, 2026-06-17 to cycle 31"
-    tar -cf $WORK/googleEarth.tar -C $WORK --exclude='googleEarth/*/stage' googleEarth
-    echo \"=== all done \$(date): $WORK/googleEarth/cv/doc.kml, archive $WORK/googleEarth.tar\"
+    for L in co cross; do
+        W=$WORK; T='co-pol (HH, or VV)'
+        [ \$L = cross ] && { W=${WORK}_cross; T='cross-pol (HV, or VH)'; }
+        python3 -m globalMosaic.mosaicStatistics cycle30/$DIR --frames $WORK/frames --work \$W --layer \$L \
+            --nProc ${NPROC:-16} --googleEarth 'cv' --zoom ${ZOOM:-0-9} \
+            --title \"NISAR temporal statistics, $DIR, \$T, 2026-06-17 to cycle 31\"
+        tar -cf \$W/googleEarth.tar -C \$W --exclude='googleEarth/*/stage' googleEarth
+        echo \"=== \$L done \$(date): \$W/googleEarth/cv/doc.kml\"
+    done
+    echo \"=== all done \$(date): $WORK/googleEarth/cv/doc.kml (co-pol), ${WORK}_cross/googleEarth/cv/doc.kml (cross-pol)\"
 " > $WORK/run.log 2>&1 &
 echo "started pid $!; log: $WORK/run.log"

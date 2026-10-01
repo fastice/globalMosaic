@@ -4,7 +4,10 @@ Global mosaic of per-frame temporal statistics (frameStatistics) with geomosaic 
 of a backscatter tiling.
 
   mosaicStatistics cycle30/ascending --frames /scratch/ianj/mosaics/stats30asc/frames \\
-      --work /scratch/ianj/mosaics/stats30asc [--nProc 16] [--tiles ...]
+      --work /scratch/ianj/mosaics/stats30asc [--layer co|cross] [--nProc 16] [--tiles ...]
+
+--layer cross mosaics the cross-pol frame files (<frame>.cross.tif: HV, or VH for dual-V) into its own
+--work directory; tiles without dual/quad-pol frames are left out.
 
 One geomosaic run per tile and layer: the tile's frame-statistics files (the frames the tiling
 lists for that tile) with `band:` = the layer and `weightBand:` 4 (n, cycles) for layers 1-3, so
@@ -146,6 +149,8 @@ def main():
     ap.add_argument('tileRun', help='backscatter tiling (tiles.geojson + tiles/<tile>.csv)')
     ap.add_argument('--frames', required=True, help='directory of frameStatistics outputs')
     ap.add_argument('--work', required=True)
+    ap.add_argument('--layer', choices=['co', 'cross'], default='co',
+                    help='frame files to mosaic: co-pol <frame>.tif or cross-pol <frame>.cross.tif [co]')
     ap.add_argument('--res', type=float, default=2.4 / 3600, help='lat/lon spacing, deg [2.4 arcsec]')
     ap.add_argument('--psResM', type=float, default=80., help='polar cap spacing, m [80]')
     ap.add_argument('--featherKm', type=float, default=10.)
@@ -158,6 +163,9 @@ def main():
     ap.add_argument('--title', default=None, help='Google Earth name prefix [NISAR temporal statistics <work name>]')
     args = ap.parse_args()
     work = os.path.abspath(args.work)
+    if args.layer == 'cross':           # cross-pol is ~7-10 dB darker: shift the quick-look stretch
+        LOOKS['mean'] = ('mean gamma0, cross-pol (dB)', 'gray', -32., -9., True)
+        LOOKS['sigma'] = ('temporal sigma, cross-pol (dB)', 'gray', -38., -13., True)
     frames = os.path.abspath(args.frames)
     os.makedirs(work, exist_ok=True)
     summary = open(f'{work}/summary.log', 'a')
@@ -169,7 +177,8 @@ def main():
     for f in feats:
         name = f['properties']['name']
         keys = {frameKey(r['name']) for r in csv.DictReader(open(f'{args.tileRun}/tiles/{name}.csv'))}
-        files = sorted(p for p in (f'{frames}/{k}.tif' for k in keys) if os.path.exists(p))
+        suffix = '.cross.tif' if args.layer == 'cross' else '.tif'
+        files = sorted(p for p in (f'{frames}/{k}{suffix}' for k in keys) if os.path.exists(p))
         if not files:
             continue
         grid = tileGrid(f['properties'], f['geometry'], args.res, args.psResM, args.featherKm)
