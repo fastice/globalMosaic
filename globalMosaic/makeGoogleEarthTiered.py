@@ -17,6 +17,10 @@ the deeper layers draw over the shallower ones where they have data:
                       - the ice-sheet margins: within --marginKm of the Antarctic and Greenland coasts
                       - glaciers and ice caps (Natural Earth glaciated areas)
                       20 MHz and 5 MHz land stops at 10.
+land/ and detail/ carry images only at their finest zoom (10, 11); their coarser levels are link-only
+(linkOnly: KMLs without overlays, no PNGs) -- the index down to the fine tiles, while base shows
+those zooms. So base plus any combination of land and detail works; land or detail alone is blank
+until its finest zoom.
 
 Sources for land/ and detail/ are written once to <out>/src10, <out>/src11 (int16 dB x 100,
 DEFLATE); gdal2tiles is resumable (-e) but the sources are rebuilt on every run.
@@ -264,6 +268,9 @@ def main():
                           title=f'{runName} - {title}')
         if rc:
             return rc
+        if sub != 'base':               # base shows the coarse zooms: keep only this layer's finest images
+            from .linkOnly import stripCoarse
+            stripCoarse(f'{out}/{sub}', args.processes)
         layers.append((title, sub))
     links = '\n'.join(f'    <NetworkLink><name>{n}</name><Link><href>{d}/doc.kml</href></Link></NetworkLink>'
                       for n, d in layers)
