@@ -21,6 +21,7 @@ KML shows): pixel = 1.40625 / 2**z deg -- 8: 19.8" (~610 m), 9: 9.9" (~305 m), 1
 '''
 import argparse
 import glob
+import math
 import os
 import re
 import subprocess
@@ -42,7 +43,9 @@ def main():
                     help='lat/lon spacing for warped sources, deg [3 arcsec]')
     ap.add_argument('--out', required=True, help='output directory (doc.kml + tile pyramid)')
     ap.add_argument('--product', default='gamma0', help='gamma0 or sigma0 [gamma0]')
-    ap.add_argument('--zoom', default='0-9', help="gdal2tiles zoom levels, e.g. '0-9' or '0-10' [0-9]")
+    ap.add_argument('--zoom', default='0-9', help="zoom levels as 256-px equivalents, e.g. '0-9' or '0-10' [0-9]")
+    ap.add_argument('--tileSize', type=int, default=256, choices=[256, 512],
+                    help='tile size, px; 512 writes a quarter as many files, same detail [256]')
     ap.add_argument('--dbMin', type=float, default=-24., help='stretch minimum, dB [-24]')
     ap.add_argument('--dbMax', type=float, default=-1., help='stretch maximum, dB [-1]')
     ap.add_argument('--resampling', default='average', help='gdal2tiles resampling [average]')
@@ -70,7 +73,7 @@ def main():
         # polar caps first (own CRS), bands on top
         inputs = sorted(glob.glob(f'{vrtDir}/cap_*.vrt')) + [f'{vrtDir}/global.vrt']
     return superoverlay(inputs, res, args.out, args.zoom, args.dbMin, args.dbMax,
-                        args.resampling, args.processes, title)
+                        args.resampling, args.processes, title, tileSize=args.tileSize)
 
 
 def setTitle(kml, title):
@@ -80,10 +83,20 @@ def setTitle(kml, title):
     open(kml, 'w').write(s)
 
 
+def tileZoom(zoom, tileSize=256):
+    ''' gdal2tiles zoom levels for a tile size, from levels given as 256-px equivalents: a 512-px tile
+    at level z has the pixel of a 256-px tile at z + 1, so '7-11' -> '6-10' (never below 0). '''
+    k = int(round(math.log2(tileSize / 256)))
+    lo, hi = (int(v) for v in zoom.split('-'))
+    return f'{max(lo - k, 0)}-{hi - k}'
+
+
 def superoverlay(inputs, res, out, zoom, dbMin=-24., dbMax=-1., resampling='average', processes=16,
-                 title=None, nodata=NODATA, scale=100.):
+                 title=None, nodata=NODATA, scale=100., tileSize=256):
     ''' nodata / scale: int16 dB x 100 with -3000 by default; Float32 linear layers (e.g. CV) pass
-    nodata=float('nan'), scale=1 and the stretch in their own units as dbMin/dbMax. '''
+    nodata=float('nan'), scale=1 and the stretch in their own units as dbMin/dbMax.
+    zoom: levels as 256-px equivalents (same pixel size whatever tileSize); tileSize 512 writes a
+    quarter as many files (much faster on network file systems such as EFS). '''
     ''' KML superoverlay of 8-bit PNG tiles of int16 dB x 100 rasters (any CRS) at <out>/doc.kml.
     Returns gdal2tiles' exit code. '''
     os.makedirs(out, exist_ok=True)
@@ -117,8 +130,8 @@ def superoverlay(inputs, res, out, zoom, dbMin=-24., dbMax=-1., resampling='aver
     with open(byte, 'w') as fp:
         fp.write(xml)
     # 3. KML superoverlay of PNG tiles
-    cmd = ['gdal2tiles.py', '--profile=geodetic', '-k', '-z', zoom, '-r', resampling,
-           f'--processes={processes}', '-w', 'none', '-e', '--tiledriver=PNG'] + \
+    cmd = ['gdal2tiles.py', '--profile=geodetic', '-k', '-z', tileZoom(zoom, tileSize), '-r', resampling,
+           f'--processes={processes}', '-w', 'none', '-e', '--tiledriver=PNG', f'--tilesize={tileSize}'] + \
         (['-t', title] if title else []) + [byte, out]
     print(' '.join(cmd), flush=True)
     rc = subprocess.run(cmd).returncode

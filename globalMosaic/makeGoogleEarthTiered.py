@@ -193,6 +193,9 @@ def main():
     ap.add_argument('--smooth', type=int, default=3, help='box smooth of the zoom-10 source, pixels [3]')
     ap.add_argument('--marginKm', type=float, default=200., help='ice-sheet margin width, km [200]')
     ap.add_argument('--processes', type=int, default=16)
+    ap.add_argument('--tileSize', type=int, default=256, choices=[256, 512],
+                    help='tile size, px; 512 writes a quarter as many files, same detail (levels then '
+                    '0-8 / 4-9 / 6-10) [256]')
     ap.add_argument('--skipTiles', action='store_true', help='reuse existing src10/src11 (tiling only)')
     ap.add_argument('--title', default=None, help='name shown in Google Earth [NISAR <product> <run name>]')
     args = ap.parse_args()
@@ -265,7 +268,7 @@ def main():
             print(f'{sub}: nothing to tile')
             continue
         rc = superoverlay(srcs, r, f'{out}/{sub}', zoom, processes=args.processes,
-                          title=f'{runName} - {title}')
+                          title=f'{runName} - {title}', tileSize=args.tileSize)
         if rc:
             return rc
         if sub != 'base':               # base shows the coarse zooms: keep only this layer's finest images

@@ -18,6 +18,7 @@ w = c['work'].rstrip('/')
 print(f"W={shlex.quote(w)}")
 print(f"ZOOM={shlex.quote(str(c.get('zoom') or '0-9'))}")
 print(f"TITLE={shlex.quote(c.get('title') or 'NISAR gamma0 ' + os.path.basename(w))}")
+print(f"TILESIZE={int(c.get('tileSize') or 256)}")
 PY
 )"
 grep -q 'Google Earth tiles' "$W/run.log" || { echo "$W/run.log: the mosaic is not done yet -- not restarting"; exit 1; }
@@ -37,14 +38,14 @@ if [ -e "$W/googleEarth" ]; then
 fi
 rm -f "$W/googleEarth.tar"
 # 3. new product, then the tars
-export W ZOOM TITLE NPROC=${NPROC:-16}
+export W ZOOM TITLE TILESIZE NPROC=${NPROC:-16}
 nohup bash -c '
     set -e
     if [ "$ZOOM" = tiered ]; then
-        makeGoogleEarthTiered "$W" --out "$W/googleEarth" --processes $NPROC --title "$TITLE"
+        makeGoogleEarthTiered "$W" --out "$W/googleEarth" --processes $NPROC --title "$TITLE" --tileSize $TILESIZE
         bash test/tarGoogleEarth.sh "$W" split
     else
-        makeGoogleEarth "$W" --out "$W/googleEarth" --processes $NPROC --zoom $ZOOM --title "$TITLE"
+        makeGoogleEarth "$W" --out "$W/googleEarth" --processes $NPROC --zoom $ZOOM --title "$TITLE" --tileSize $TILESIZE
         bash test/tarGoogleEarth.sh "$W"
     fi
     echo "=== all done $(date): $W/googleEarth/doc.kml"

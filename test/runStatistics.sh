@@ -35,7 +35,7 @@ nohup bash -c "
         W=$WORK; T='co-pol (HH, or VV)'
         [ \$L = cross ] && { W=${WORK}_cross; T='cross-pol (HV, or VH)'; }
         python3 -m globalMosaic.mosaicStatistics cycle30/$DIR --frames $WORK/frames --work \$W --layer \$L \
-            --nProc ${NPROC:-16} --googleEarth 'cv' --zoom ${ZOOM:-0-9} \
+            --nProc ${NPROC:-16} --googleEarth 'cv' --zoom ${ZOOM:-0-9} --tileSize ${TILESIZE:-512} \
             --title \"NISAR temporal statistics, $DIR, \$T, 2026-06-17 to cycle 31\"
         tar -cf \$W/googleEarth.tar -C \$W --exclude='googleEarth/*/stage' googleEarth
         echo \"=== \$L done \$(date): \$W/googleEarth/cv/doc.kml\"

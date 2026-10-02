@@ -146,6 +146,8 @@ def main():
     ap.add_argument('--nProc', type=int, default=16)
     ap.add_argument('--tiles', nargs='+', default=None, help='only these tiles')
     ap.add_argument('--zoom', default='0-9', help='Google Earth zoom levels [0-9]')
+    ap.add_argument('--tileSize', type=int, default=256, choices=[256, 512],
+                    help='Google Earth tile size, px (512: a quarter as many files) [256]')
     ap.add_argument('--noGoogleEarth', action='store_true')
     args = ap.parse_args()
     work = os.path.abspath(args.work)
@@ -209,7 +211,7 @@ def main():
     from .makeGoogleEarth import superoverlay
     rc = superoverlay([f'{vd}/cap_{n}.vrt' for n, _ in caps] + [f'{vd}/global.vrt'], args.res,
                       f'{work}/googleEarth', args.zoom, dbMin=0., dbMax=100., processes=args.nProc,
-                      title=f'NISAR 12-day coherence {os.path.basename(work)}')
+                      title=f'NISAR 12-day coherence {os.path.basename(work)}', tileSize=args.tileSize)
     log(f'Google Earth: {work}/googleEarth/doc.kml (rc {rc})', summary)
     return rc
 

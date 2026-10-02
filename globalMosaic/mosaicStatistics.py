@@ -160,6 +160,8 @@ def main():
     ap.add_argument('--googleEarth', default=None,
                     help='also build Google Earth of these layers, e.g. "cv" (zoom --zoom) [none]')
     ap.add_argument('--zoom', default='0-9')
+    ap.add_argument('--tileSize', type=int, default=256, choices=[256, 512],
+                    help='Google Earth tile size, px (512: a quarter as many files) [256]')
     ap.add_argument('--title', default=None, help='Google Earth name prefix [NISAR temporal statistics <work name>]')
     args = ap.parse_args()
     work = os.path.abspath(args.work)
@@ -232,7 +234,7 @@ def main():
             continue
         lo, hi, sc = stretches[L]
         rc = superoverlay(srcs, args.res, f'{work}/googleEarth/{L}', args.zoom, dbMin=lo, dbMax=hi,
-                          processes=args.nProc, title=f'{title} - {L}', nodata=float('nan'), scale=sc)
+                          processes=args.nProc, title=f'{title} - {L}', nodata=float('nan'), scale=sc, tileSize=args.tileSize)
         log(f'Google Earth {L}: {work}/googleEarth/{L}/doc.kml (rc {rc})', summary)
     return 1 if failed else 0
 

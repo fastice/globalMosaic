@@ -14,6 +14,8 @@ WORK=$(python3 -c "import yaml; print(yaml.safe_load(open('$CONFIG'))['work'])")
 export ZOOM=${ZOOM:-$(python3 -c "import yaml; print(yaml.safe_load(open('$CONFIG')).get('zoom') or '0-9')")}
 # Google Earth name: the yaml's title:, else NISAR gamma0 <run directory name>
 export TITLE=$(python3 -c "import yaml, os; c = yaml.safe_load(open('$CONFIG')); print(c.get('title') or 'NISAR gamma0 ' + os.path.basename(c['work'].rstrip('/')))")
+# Google Earth tile size (256 or 512; 512 writes a quarter as many files): the yaml's tileSize:, else 256
+export TILESIZE=$(python3 -c "import yaml; print(yaml.safe_load(open('$CONFIG')).get('tileSize') or 256)")
 mkdir -p $WORK
 nohup bash -c '
     set -e
@@ -25,9 +27,9 @@ nohup bash -c '
     rm -rf "$1/googleEarth" "$1/googleEarth.tar"
     if [ "${ZOOM:-0-9}" = tiered ]; then
         # base 0-9 everywhere, land 5-10 smoothed, detail 7-11 (40/77 MHz land, ice margins, glaciers)
-        makeGoogleEarthTiered "$1" --out "$1/googleEarth" --processes ${NPROC:-24} --title "$TITLE"
+        makeGoogleEarthTiered "$1" --out "$1/googleEarth" --processes ${NPROC:-24} --title "$TITLE" --tileSize $TILESIZE
     else
-        makeGoogleEarth "$1" --out "$1/googleEarth" --processes ${NPROC:-24} --zoom ${ZOOM:-0-9} --title "$TITLE"
+        makeGoogleEarth "$1" --out "$1/googleEarth" --processes ${NPROC:-24} --zoom ${ZOOM:-0-9} --title "$TITLE" --tileSize $TILESIZE
     fi
     # one file to copy off the machine: PNGs are already compressed, so a plain tar
     bash test/tarGoogleEarth.sh "$1"
