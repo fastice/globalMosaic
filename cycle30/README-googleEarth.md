@@ -26,23 +26,26 @@ pole hole south of 87 S) is left empty; see `notAcquiredAscending/` for the full
 | `ge_base.tar` | `googleEarth/doc.kml` (top level) + `googleEarth/base/` | 0-8 | ~300 m |
 | `ge_land.tar` | `googleEarth/land/` (land only, lightly smoothed) | 4-9 (images at 9) | ~150 m |
 | `ge_detail.tar` | `googleEarth/detail/` (40/77 MHz land, ice-sheet margins, glaciers) | 6-10 (images at 10) | ~75 m |
+| `ge_detail20.tar` (optional) | `googleEarth/detail20/` (the rest of the land covered by 20 MHz data; not ocean or sea ice, not 5 MHz-only land, not the ice-sheet interiors) | 6-10 (images at 10) | ~75 m |
 
 Tiles are 512 x 512 PNGs in a KML superoverlay. Google Earth loads them as you zoom.
 
 ## Opening it
 
-1. Unpack the tars **into the same folder**:
+1. Unpack the tars **into the same folder** (each carries the same top `doc.kml`):
 
        tar -xf ge_base.tar
        tar -xf ge_land.tar
        tar -xf ge_detail.tar
+       tar -xf ge_detail20.tar      # optional
 
 2. In Google Earth Pro: **File > Open** and pick one of:
-   - `googleEarth/doc.kml`: the full product (all three layers)
+   - `googleEarth/doc.kml`: the full product (all layers)
    - `googleEarth/base/doc.kml`: the low-resolution global layer only
 
-Base works on its own and with any combination of land and detail. Land and detail on their own
-show nothing until you zoom in to their finest level, because base supplies the coarser zooms.
+Base works on its own and with any combination of the others. Land, detail and detail20 hold images
+only at their finest level (their coarser levels are just links), so on their own they show nothing
+until you zoom in that far; base supplies the coarser zooms.
 If one of them is missing, the top `doc.kml` shows that entry as a broken link but displays the
 rest normally.
 

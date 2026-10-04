@@ -17,13 +17,18 @@ the deeper layers draw over the shallower ones where they have data:
                       - the ice-sheet margins: within --marginKm of the Antarctic and Greenland coasts
                       - glaciers and ice caps (Natural Earth glaciated areas)
                       20 MHz and 5 MHz land stops at 10.
-land/ and detail/ carry images only at their finest zoom (10, 11); their coarser levels are link-only
-(linkOnly: KMLs without overlays, no PNGs) -- the index down to the fine tiles, while base shows
-those zooms. So base plus any combination of land and detail works; land or detail alone is blank
-until its finest zoom.
+  detail20/ zoom 7-11 the rest of the land covered by 20 MHz granules at full resolution (not ocean or
+                      sea ice, not 5 MHz-only land, not the ice-sheet interiors): an optional add-on,
+                      shipped as its own tar
+land/, detail/ and detail20/ carry images only at their finest zoom (10, 11); their coarser levels are
+link-only (linkOnly: KMLs without overlays, no PNGs) -- the index down to the fine tiles, while base
+shows those zooms. So base plus any combination of the others works; any of them alone is blank
+until its finest zoom. --layers builds only some layers (e.g. add detail20 to an existing product);
+the top doc.kml always links every layer present.
 
-Sources for land/ and detail/ are written once to <out>/src10, <out>/src11 (int16 dB x 100,
-DEFLATE); gdal2tiles is resumable (-e) but the sources are rebuilt on every run.
+Sources for land/, detail/ and detail20/ are written to <out>/src10, src11, src20 (int16 dB x 100,
+DEFLATE), only for the layers being built; gdal2tiles is resumable (-e) but the sources are rebuilt
+on every run.
 '''
 import argparse
 import concurrent.futures
@@ -47,6 +52,11 @@ from .makeGoogleEarth import superoverlay
 
 gdal.UseExceptions()
 NODATA = -3000
+# layer: (title in Google Earth, zoom as 256-px levels, source directory or None for the mosaic)
+LAYERS = {'base': ('base (zoom 0-9, everything)', '0-9', None),
+          'land': ('land (zoom 5-10, smoothed)', '5-10', 'src10'),
+          'detail': ('detail (zoom 7-11: 40/77 MHz land, ice margins, glaciers)', '7-11', 'src11'),
+          'detail20': ('detail20 (zoom 7-11: other 20 MHz land)', '7-11', 'src20')}
 POLAR = {3031: box(-180, -90, 180, -60), 3413: box(-75, 59, -10, 84)}   # Antarctica, Greenland
 PSRES = 1000.                                                           # ice-class raster, m
 
@@ -136,9 +146,9 @@ def writeTif(path, a, gt, srs):
 
 
 def tileSources(job):
-    ''' Level-10 (land, averaged, smoothed) and level-11 (detail mask, full resolution) sources
-    of one tile. '''
-    name, vrt, epsg, landG, detailG, icePaths, out10, out11, smooth = job
+    ''' Level-10 (land, averaged, smoothed), level-11 (detail mask, full resolution) and detail20
+    (other 20 MHz land, full resolution) sources of one tile, for the layers in `want`. '''
+    name, vrt, epsg, landG, detailG, d20G, icePaths, out, smooth, want = job
     ds = gdal.Open(vrt)
     gt = ds.GetGeoTransform()
     srs = ds.GetProjection()
@@ -155,12 +165,15 @@ def tileSources(job):
     land = features.rasterize([(landG, 1)], out_shape=m.shape, transform=Affine.from_gdal(*gt10),
                               dtype='uint8').astype(bool) if not landG.is_empty else np.zeros(m.shape, bool)
     keep = v & land
-    if keep.any():
-        writeTif(f'{out10}/{name}.tif', np.where(keep, np.round(m), NODATA).astype('i2'), gt10, srs)
+    if keep.any() and 'land' in want:
+        writeTif(f'{out}/src10/{name}.tif', np.where(keep, np.round(m), NODATA).astype('i2'), gt10, srs)
         notes.append('land10')
     # ---- level 11: full resolution inside the detail mask
     det = features.rasterize([(detailG, 1)], out_shape=a.shape, transform=Affine.from_gdal(*gt),
                              dtype='uint8').astype(bool) if not detailG.is_empty else np.zeros(a.shape, bool)
+    landFull = features.rasterize([(landG, 1)], out_shape=a.shape, transform=Affine.from_gdal(*gt),
+                                  dtype='uint8').astype(bool) if not landG.is_empty else np.zeros(a.shape, bool)
+    interior = np.zeros(a.shape, bool)
     if icePaths:
         # ice-sheet classes on this grid: interior leaves the detail set, margin joins it (on land)
         ny, nx = a.shape
@@ -171,17 +184,24 @@ def tileSources(job):
         Y = gt[3] + ii[:, None] * gt[5] + 0 * jj[None, :]
         c = iceClass(icePaths, epsg, X, Y)
         c = np.repeat(np.repeat(c, step, 0), step, 1)[:ny, :nx]
-        landFull = features.rasterize([(landG, 1)], out_shape=a.shape, transform=Affine.from_gdal(*gt),
-                                      dtype='uint8').astype(bool) if not landG.is_empty else np.zeros(a.shape, bool)
         det = (det & (c != 2)) | ((c == 1) & landFull)
+        interior = c == 2
     det &= valid
-    if det.any():
-        rows, cols = np.nonzero(det.any(1))[0], np.nonzero(det.any(0))[0]
-        r0, r1, c0, c1 = rows[0], rows[-1] + 1, cols[0], cols[-1] + 1
-        sub = np.where(det[r0:r1, c0:c1], a[r0:r1, c0:c1], NODATA).astype('i2')
-        writeTif(f'{out11}/{name}.tif', sub,
-                 (gt[0] + c0 * gt[1], gt[1], 0., gt[3] + r0 * gt[5], 0., gt[5]), srs)
-        notes.append(f'detail11 {det.mean():.0%}')
+    for layer, mask, sub in (('detail', det, 'src11'), ('detail20', None, 'src20')):
+        if layer not in want:
+            continue
+        if mask is None:
+            # 20 MHz land that detail does not already have (not the ice-sheet interiors)
+            mask = (features.rasterize([(d20G, 1)], out_shape=a.shape, transform=Affine.from_gdal(*gt),
+                                       dtype='uint8').astype(bool) if not d20G.is_empty else np.zeros(a.shape, bool))
+            mask &= landFull & valid & ~det & ~interior
+        if mask.any():
+            rows, cols = np.nonzero(mask.any(1))[0], np.nonzero(mask.any(0))[0]
+            r0, r1, c0, c1 = rows[0], rows[-1] + 1, cols[0], cols[-1] + 1
+            arr = np.where(mask[r0:r1, c0:c1], a[r0:r1, c0:c1], NODATA).astype('i2')
+            writeTif(f'{out}/{sub}/{name}.tif', arr,
+                     (gt[0] + c0 * gt[1], gt[1], 0., gt[3] + r0 * gt[5], 0., gt[5]), srs)
+            notes.append(f'{layer} {mask.mean():.0%}')
     return name, notes
 
 
@@ -196,13 +216,17 @@ def main():
     ap.add_argument('--tileSize', type=int, default=256, choices=[256, 512],
                     help='tile size, px; 512 writes a quarter as many files, same detail (levels then '
                     '0-8 / 4-9 / 6-10) [256]')
-    ap.add_argument('--skipTiles', action='store_true', help='reuse existing src10/src11 (tiling only)')
+    ap.add_argument('--skipTiles', action='store_true', help='reuse existing src10/src11/src20 (tiling only)')
+    ap.add_argument('--layers', nargs='+', choices=list(LAYERS), default=['base', 'land', 'detail'],
+                    help='layers to build; e.g. --layers detail20 adds that layer to an existing product '
+                    '[base land detail]')
     ap.add_argument('--title', default=None, help='name shown in Google Earth [NISAR <product> <run name>]')
     args = ap.parse_args()
     work = os.path.abspath(args.work)
     out = os.path.abspath(args.out or f'{work}/googleEarth')
-    src10, src11, stage = f'{out}/src10', f'{out}/src11', f'{out}/stage'
-    for d in (src10, src11, stage):
+    stage = f'{out}/stage'
+    srcDirs = [f'{out}/{LAYERS[L][2]}' for L in args.layers if LAYERS[L][2]]
+    for d in srcDirs + [stage]:
         os.makedirs(d, exist_ok=True)
     cfg = yaml.safe_load(open(f'{work}/run.yaml'))
     repo = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -210,7 +234,7 @@ def main():
     vrtDir = f'{work}/vrt/{args.product}'
     res = abs(gdal.Open(f'{vrtDir}/global.vrt').GetGeoTransform()[5])
 
-    if not args.skipTiles:
+    if not args.skipTiles and srcDirs:
         import pyproj
         print('masks: land, glaciers, ice-sheet margins, 40/77 MHz coverage', flush=True)
         land = landGeometry()
@@ -233,11 +257,13 @@ def main():
                 continue
             rows = list(csv.DictReader(open(f'{tileRun}/tiles/{name}.csv')))
             hi = [geoms[r['name']] for r in rows if int(r['bwMHz']) >= 40 and geoms.get(r['name'])]
+            mid = [geoms[r['name']] for r in rows if int(r['bwMHz']) == 20 and geoms.get(r['name'])]
             if epsg == 4326:
                 tb = shape(t['geometry'])
                 landG = land.intersection(tb)
                 hiG = unary_union([unwrap(shape(g)) for g in hi]).intersection(tb) if hi else box(0, 0, 0, 0)
                 detailG = unary_union([hiG, glaciers.intersection(tb)]).intersection(landG)
+                d20G = unary_union([unwrap(shape(g)) for g in mid]).intersection(tb) if mid else box(0, 0, 0, 0)
                 ice = [icePaths[e] for e, b in POLAR.items() if b.intersects(tb)]
             else:
                 fwd = pyproj.Transformer.from_crs(4326, epsg, always_xy=True).transform
@@ -248,9 +274,10 @@ def main():
                 hiG = unary_union([transform(fwd, shape(g)).buffer(0) for g in hi]) if hi else box(0, 0, 0, 0)
                 glG = transform(fwd, glaciers.intersection(capLL).segmentize(0.1)).buffer(0)
                 detailG = unary_union([hiG, glG]).intersection(landG)
+                d20G = unary_union([transform(fwd, shape(g)).buffer(0) for g in mid]) if mid else box(0, 0, 0, 0)
                 ice = [icePaths[epsg]] if epsg in icePaths else []
-            jobs.append((name, vrt, epsg, landG, detailG, ice, src10, src11, args.smooth))
-        print(f'{len(jobs)} tiles -> {src10}, {src11}', flush=True)
+            jobs.append((name, vrt, epsg, landG, detailG, d20G, ice, out, args.smooth, set(args.layers)))
+        print(f'{len(jobs)} tiles -> {", ".join(srcDirs)}', flush=True)
         with concurrent.futures.ProcessPoolExecutor(args.processes) as pool:
             for k, (name, notes) in enumerate(pool.map(tileSources, jobs), 1):
                 if k % 50 == 0 or k == len(jobs):
@@ -258,12 +285,10 @@ def main():
 
     caps = sorted(glob.glob(f'{vrtDir}/cap_*.vrt'))
     runName = args.title or f'NISAR {args.product} {os.path.basename(work)}'
-    layers = []
-    for title, sub, srcs, r, zoom in (
-            ('base (zoom 0-9, everything)', 'base', caps + [f'{vrtDir}/global.vrt'], res, '0-9'),
-            ('land (zoom 5-10, smoothed)', 'land', sorted(glob.glob(f'{src10}/*.tif')), 2 * res, '5-10'),
-            ('detail (zoom 7-11: 40/77 MHz land, ice margins, glaciers)', 'detail',
-             sorted(glob.glob(f'{src11}/*.tif')), res, '7-11')):
+    for sub in [L for L in LAYERS if L in args.layers]:
+        title, zoom, srcDir = LAYERS[sub]
+        srcs = caps + [f'{vrtDir}/global.vrt'] if srcDir is None else sorted(glob.glob(f'{out}/{srcDir}/*.tif'))
+        r = 2 * res if sub == 'land' else res
         if not srcs:
             print(f'{sub}: nothing to tile')
             continue
@@ -274,7 +299,8 @@ def main():
         if sub != 'base':               # base shows the coarse zooms: keep only this layer's finest images
             from .linkOnly import stripCoarse
             stripCoarse(f'{out}/{sub}', args.processes)
-        layers.append((title, sub))
+    # the top doc.kml links every layer on disk, built in this run or earlier
+    layers = [(LAYERS[L][0], L) for L in LAYERS if os.path.exists(f'{out}/{L}/doc.kml')]
     links = '\n'.join(f'    <NetworkLink><name>{n}</name><Link><href>{d}/doc.kml</href></Link></NetworkLink>'
                       for n, d in layers)
     with open(f'{out}/doc.kml', 'w') as fp:
