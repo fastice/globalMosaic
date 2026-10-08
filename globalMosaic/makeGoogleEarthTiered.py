@@ -63,9 +63,9 @@ PSRES = 1000.                                                           # ice-cl
 
 def landGeometry():
     import cartopy.feature as cf
-    return unary_union(list(cf.LAND.with_scale('50m').geometries()) +
-                       list(cf.LAKES.with_scale('50m').geometries()) +
-                       list(cf.NaturalEarthFeature('physical', 'antarctic_ice_shelves_polys', '50m').geometries()) +
+    return unary_union(list(cf.LAND.with_scale('10m').geometries()) +
+                       list(cf.LAKES.with_scale('10m').geometries()) +
+                       list(cf.NaturalEarthFeature('physical', 'antarctic_ice_shelves_polys', '10m').geometries()) +
                        [box(46, 36, 55.5, 47.5)])                         # the Caspian
 
 
