@@ -49,6 +49,9 @@ def main():
     ap.add_argument('--dbMin', type=float, default=-24., help='stretch minimum, dB [-24]')
     ap.add_argument('--dbMax', type=float, default=-1., help='stretch maximum, dB [-1]')
     ap.add_argument('--resampling', default='average', help='gdal2tiles resampling [average]')
+    ap.add_argument('--oceanAltitude', type=float, default=None,
+                    help='lift ocean overlays this many m above sea level; off by default '
+                         '(a 10 m lift made Google Earth drop the sea ice at the mid zooms)')
     ap.add_argument('--processes', type=int, default=16, help='gdal2tiles processes [16]')
     ap.add_argument('--title', default=None,
                     help='name shown in Google Earth [NISAR <product> <run directory name>]')
@@ -73,7 +76,8 @@ def main():
         # polar caps first (own CRS), bands on top
         inputs = sorted(glob.glob(f'{vrtDir}/cap_*.vrt')) + [f'{vrtDir}/global.vrt']
     return superoverlay(inputs, res, args.out, args.zoom, args.dbMin, args.dbMax,
-                        args.resampling, args.processes, title, tileSize=args.tileSize)
+                        args.resampling, args.processes, title, tileSize=args.tileSize,
+                        oceanAltitude=args.oceanAltitude)
 
 
 def setTitle(kml, title):
@@ -92,7 +96,7 @@ def tileZoom(zoom, tileSize=256):
 
 
 def superoverlay(inputs, res, out, zoom, dbMin=-24., dbMax=-1., resampling='average', processes=16,
-                 title=None, nodata=NODATA, scale=100., tileSize=256):
+                 title=None, nodata=NODATA, scale=100., tileSize=256, oceanAltitude=None):
     ''' nodata / scale: int16 dB x 100 with -3000 by default; Float32 linear layers (e.g. CV) pass
     nodata=float('nan'), scale=1 and the stretch in their own units as dbMin/dbMax.
     zoom: levels as 256-px equivalents (same pixel size whatever tileSize); tileSize 512 writes a
@@ -137,9 +141,12 @@ def superoverlay(inputs, res, out, zoom, dbMin=-24., dbMax=-1., resampling='aver
     rc = subprocess.run(cmd).returncode
     if rc == 0 and title:
         setTitle(f'{out}/doc.kml', title)        # also when gdal2tiles resumed an older product
-    if rc == 0:                                  # ocean overlays at sea level, not under the water
+    # oceanAltitude lifts the ocean overlays off the sea floor (oceanAltitude.py). Off by default:
+    # pinned at 10 m absolute, Google Earth dropped the sea ice at the mid zooms (2026-10-13), while
+    # draped it draws at every zoom. Pass a height to restore the lift.
+    if rc == 0 and oceanAltitude is not None:
         from .oceanAltitude import liftOcean
-        liftOcean(out, processes=processes)
+        liftOcean(out, oceanAltitude, processes=processes)
     if rc == 0:
         n = sum(len(f) for _, _, f in os.walk(out))
         print(f'done: {out}/doc.kml; files under {out}: {n}')
