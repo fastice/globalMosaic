@@ -16,10 +16,10 @@ the deeper layers draw over the shallower ones where they have data:
                         Greenland ice-sheet interiors
                       - the ice-sheet margins: within --marginKm of the Antarctic and Greenland coasts
                       - glaciers and ice caps (Natural Earth glaciated areas)
-                      20 MHz and 5 MHz land stops at 10.
-  detail20/ zoom 7-11 the rest of the land covered by 20 MHz granules at full resolution (not ocean or
-                      sea ice, not 5 MHz-only land, not the ice-sheet interiors): an optional add-on,
-                      shipped as its own tar
+                      other land stops at 10.
+  detail20/ zoom 7-11 all the rest of the land at full resolution, whatever the bandwidth (not open
+                      ocean or sea ice, not the ice-sheet interiors): an optional add-on, shipped as
+                      its own tar
 land/, detail/ and detail20/ carry images only at their finest zoom (10, 11); their coarser levels are
 link-only (linkOnly: KMLs without overlays, no PNGs) -- the index down to the fine tiles, while base
 shows those zooms. So base plus any combination of the others works; any of them alone is blank
@@ -56,17 +56,25 @@ NODATA = -3000
 LAYERS = {'base': ('base (zoom 0-9, everything)', '0-9', None),
           'land': ('land (zoom 5-10, smoothed)', '5-10', 'src10'),
           'detail': ('detail (zoom 7-11: 40/77 MHz land, ice margins, glaciers)', '7-11', 'src11'),
-          'detail20': ('detail20 (zoom 7-11: other 20 MHz land)', '7-11', 'src20')}
+          'detail20': ('detail20 (zoom 7-11: the rest of the land)', '7-11', 'src20')}
 POLAR = {3031: box(-180, -90, 180, -60), 3413: box(-75, 59, -10, 84)}   # Antarctica, Greenland
 PSRES = 1000.                                                           # ice-class raster, m
 
 
-def landGeometry():
+def landGeometry(closeKm=10.):
+    ''' Natural Earth 10 m land, closed by closeKm: water enclosed by land within about 2 x closeKm
+    -- sounds, inlets, fjords, straits, the Inside Passage -- counts as land, so it gets the deep
+    zoom instead of falling back to base at 300 m. An open coast is unchanged, unlike a plain
+    buffer, which would also paint a fringe along every shore. closeKm=0 turns it off. '''
     import cartopy.feature as cf
-    return unary_union(list(cf.LAND.with_scale('10m').geometries()) +
-                       list(cf.LAKES.with_scale('10m').geometries()) +
-                       list(cf.NaturalEarthFeature('physical', 'antarctic_ice_shelves_polys', '10m').geometries()) +
-                       [box(46, 36, 55.5, 47.5)])                         # the Caspian
+    g = unary_union(list(cf.LAND.with_scale('10m').geometries()) +
+                    list(cf.LAKES.with_scale('10m').geometries()) +
+                    list(cf.NaturalEarthFeature('physical', 'antarctic_ice_shelves_polys', '10m').geometries()) +
+                    [box(46, 36, 55.5, 47.5)])                            # the Caspian
+    if closeKm:
+        d = closeKm / 111.32            # degrees: the reach is closeKm in latitude, and less in
+        g = g.buffer(d).buffer(-d)      # longitude by cos(lat), so N-S channels close less readily
+    return g
 
 
 def glacierGeometry():
@@ -90,7 +98,7 @@ def iceClassRaster(land, epsg, marginKm, path):
     # shelves are margin too, so grounding zones get full resolution, not only the shelf fronts
     import cartopy.feature as cf
     shelves = unary_union(list(cf.NaturalEarthFeature('physical', 'antarctic_ice_shelves_polys',
-                                                      '50m').geometries())).intersection(POLAR[epsg])
+                                                      '10m').geometries())).intersection(POLAR[epsg])
     shelves = transform(fwd, shelves.segmentize(0.1)).buffer(0) if not shelves.is_empty else box(0, 0, 0, 0)
     grounded = ice.difference(shelves.buffer(2000))
     margin = grounded.intersection(grounded.boundary.buffer(marginKm * 1000.)).union(shelves.intersection(ice))
@@ -148,7 +156,7 @@ def writeTif(path, a, gt, srs):
 def tileSources(job):
     ''' Level-10 (land, averaged, smoothed), level-11 (detail mask, full resolution) and detail20
     (other 20 MHz land, full resolution) sources of one tile, for the layers in `want`. '''
-    name, vrt, epsg, landG, detailG, d20G, icePaths, out, smooth, want = job
+    name, vrt, epsg, landG, detailG, icePaths, out, smooth, want = job
     ds = gdal.Open(vrt)
     gt = ds.GetGeoTransform()
     srs = ds.GetProjection()
@@ -191,10 +199,9 @@ def tileSources(job):
         if layer not in want:
             continue
         if mask is None:
-            # 20 MHz land that detail does not already have (not the ice-sheet interiors)
-            mask = (features.rasterize([(d20G, 1)], out_shape=a.shape, transform=Affine.from_gdal(*gt),
-                                       dtype='uint8').astype(bool) if not d20G.is_empty else np.zeros(a.shape, bool))
-            mask &= landFull & valid & ~det & ~interior
+            # whatever land detail does not already have (not the ice-sheet interiors), at any
+            # bandwidth: 5 MHz land was left with no deep zoom at all, most visibly in the Sahara
+            mask = landFull & valid & ~det & ~interior
         if mask.any():
             rows, cols = np.nonzero(mask.any(1))[0], np.nonzero(mask.any(0))[0]
             r0, r1, c0, c1 = rows[0], rows[-1] + 1, cols[0], cols[-1] + 1
@@ -212,6 +219,9 @@ def main():
     ap.add_argument('--product', default='gamma0')
     ap.add_argument('--smooth', type=int, default=3, help='box smooth of the zoom-10 source, pixels [3]')
     ap.add_argument('--marginKm', type=float, default=200., help='ice-sheet margin width, km [200]')
+    ap.add_argument('--closeKm', type=float, default=10.,
+                    help='close the land mask by this much, so water enclosed within about twice it '
+                         '(sounds, inlets, fjords) gets the deep zoom; 0 for land only [10]')
     ap.add_argument('--processes', type=int, default=16)
     ap.add_argument('--oceanAltitude', type=float, default=None,
                     help='lift ocean overlays this many m above sea level; off by default '
@@ -240,7 +250,7 @@ def main():
     if not args.skipTiles and srcDirs:
         import pyproj
         print('masks: land, glaciers, ice-sheet margins, 40/77 MHz coverage', flush=True)
-        land = landGeometry()
+        land = landGeometry(args.closeKm)
         glaciers = glacierGeometry()
         icePaths = {e: iceClassRaster(land, e, args.marginKm, f'{stage}/ice{e}.npz') for e in POLAR}
         # footprints (valid ones where scanned) of every catalogue next to the tiling
@@ -260,13 +270,11 @@ def main():
                 continue
             rows = list(csv.DictReader(open(f'{tileRun}/tiles/{name}.csv')))
             hi = [geoms[r['name']] for r in rows if int(r['bwMHz']) >= 40 and geoms.get(r['name'])]
-            mid = [geoms[r['name']] for r in rows if int(r['bwMHz']) == 20 and geoms.get(r['name'])]
             if epsg == 4326:
                 tb = shape(t['geometry'])
                 landG = land.intersection(tb)
                 hiG = unary_union([unwrap(shape(g)) for g in hi]).intersection(tb) if hi else box(0, 0, 0, 0)
                 detailG = unary_union([hiG, glaciers.intersection(tb)]).intersection(landG)
-                d20G = unary_union([unwrap(shape(g)) for g in mid]).intersection(tb) if mid else box(0, 0, 0, 0)
                 ice = [icePaths[e] for e, b in POLAR.items() if b.intersects(tb)]
             else:
                 fwd = pyproj.Transformer.from_crs(4326, epsg, always_xy=True).transform
@@ -277,9 +285,8 @@ def main():
                 hiG = unary_union([transform(fwd, shape(g)).buffer(0) for g in hi]) if hi else box(0, 0, 0, 0)
                 glG = transform(fwd, glaciers.intersection(capLL).segmentize(0.1)).buffer(0)
                 detailG = unary_union([hiG, glG]).intersection(landG)
-                d20G = unary_union([transform(fwd, shape(g)).buffer(0) for g in mid]) if mid else box(0, 0, 0, 0)
                 ice = [icePaths[epsg]] if epsg in icePaths else []
-            jobs.append((name, vrt, epsg, landG, detailG, d20G, ice, out, args.smooth, set(args.layers)))
+            jobs.append((name, vrt, epsg, landG, detailG, ice, out, args.smooth, set(args.layers)))
         print(f'{len(jobs)} tiles -> {", ".join(srcDirs)}', flush=True)
         with concurrent.futures.ProcessPoolExecutor(args.processes) as pool:
             for k, (name, notes) in enumerate(pool.map(tileSources, jobs), 1):

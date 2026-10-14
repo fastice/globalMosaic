@@ -26,7 +26,7 @@ pole hole south of 87 S) is left empty; see `notAcquiredAscending/` for the full
 | `ge_base.tar` | `googleEarth/doc.kml` (top level) + `googleEarth/base/` | 0-8 | ~300 m |
 | `ge_land.tar` | `googleEarth/land/` (land only, lightly smoothed) | 4-9 (images at 9) | ~150 m |
 | `ge_detail.tar` | `googleEarth/detail/` (40/77 MHz land, ice-sheet margins, glaciers) | 6-10 (images at 10) | ~75 m |
-| `ge_detail20.tar` (optional) | `googleEarth/detail20/` (the rest of the land covered by 20 MHz data; not ocean or sea ice, not 5 MHz-only land, not the ice-sheet interiors) | 6-10 (images at 10) | ~75 m |
+| `ge_detail20.tar` (optional) | `googleEarth/detail20/` (all the rest of the land, whatever the bandwidth; not open ocean or sea ice, not the ice-sheet interiors) | 6-10 (images at 10) | ~75 m |
 
 Tiles are 512 x 512 PNGs in a KML superoverlay. Google Earth loads them as you zoom.
 
