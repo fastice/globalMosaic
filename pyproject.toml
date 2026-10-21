@@ -34,6 +34,8 @@ packages = ["globalMosaic"]
 [project.scripts]
 globalGCOVTiles = "globalMosaic.globalGCOVTiles:main"
 "globalGCOVTiles.py" = "globalMosaic.globalGCOVTiles:main"
+easeTiles = "globalMosaic.easeTiles:main"
+"easeTiles.py" = "globalMosaic.easeTiles:main"
 coverageMaps = "globalMosaic.coverageMaps:main"
 "coverageMaps.py" = "globalMosaic.coverageMaps:main"
 runGeomosaicTiles = "globalMosaic.runGeomosaicTiles:main"

@@ -48,6 +48,8 @@ Outputs (--work DIR)
   vrt/<product>/band_<lat0>_<lat1>.vrt                 one latitude band at its native spacing
   vrt/<product>/global.vrt       all lat/lon bands (resampled to the finest spacing on read)
   vrt/<product>/cap_<name>.vrt   polar cap tiles (EPSG 3031/3413, own CRS, not in global.vrt)
+  vrt/<product>/ease_<epsg>.vrt  all EASE-Grid tiles of a hemisphere (EPSG 6931/6932, one grid);
+                 an EASE run has no latitude bands, so it writes no global.vrt
   products: gamma0 by default (-calOutput gamma0); --calOutput both adds sigma0
   quicklooks/progress.png, progress.txt   updated while the run goes (--progressMinutes): tiles
                  done so far in grey over the planned tiles in blue (failed tiles red): mid
@@ -109,6 +111,18 @@ def tileGrid(props, geom, res, psResM, featherKm):
     Lat/lon tiles (EPSG 4326) are in degrees; polar cap tiles (kind 'ps') are squares about the
     pole in metres. Edges (x0, y0) are pixel EDGES; the header adds half a pixel, because geomosaic
     always reads the header origin as the first pixel's centre. '''
+    if props.get('kind') == 'ease':
+        # EASE-Grid 2.0 tile: a square in metres anywhere on the hemisphere grid (not centred on
+        # the pole like 'ps'), so the origin comes from the tile's own projected bounds.
+        pad = math.ceil(featherKm * 1000. / psResM)
+        x0 = math.floor(props['xMin'] / psResM) * psResM - pad * psResM
+        y0 = math.floor(props['yMin'] / psResM) * psResM - pad * psResM
+        nx = int(round((props['xMax'] - props['xMin']) / psResM)) + 2 * pad
+        ny = int(round((props['yMax'] - props['yMin']) / psResM)) + 2 * pad
+        return dict(epsg=props['epsg'], unit=1000.,
+                    tile=(props['xMin'], props['yMin'], props['xMax'], props['yMax']),
+                    dx=psResM, dy=psResM, x0=x0, y0=y0, nx=nx, ny=ny,
+                    fl=round(featherKm * 1000. / psResM))
     if props.get('kind') == 'ps':
         half = math.ceil(props['halfWidthM'] / psResM) * psResM
         pad = math.ceil(featherKm * 1000. / psResM)
@@ -461,7 +475,7 @@ def main():
     if args.excludeTiles:
         feats = [f for f in feats if f['properties']['name'] not in args.excludeTiles]
     import csv
-    jobs, grids, bands, caps = [], {}, {}, []
+    jobs, grids, bands, caps, ease = [], {}, {}, [], []
     for f in feats:
         name, props = f['properties']['name'], f['properties']
         grid = tileGrid(props, f['geometry'], args.res, args.psResM, args.featherKm)
@@ -483,6 +497,8 @@ def main():
             s = grid['tile'][1]
             latBand = (math.floor(s / 6) * 6, math.floor(s / 6) * 6 + props['height'])
             bands.setdefault(latBand, dict(dLon=grid['dx'], tiles=[]))['tiles'].append(name)
+        elif props.get('kind') == 'ease':
+            ease.append(name)                 # one combined VRT per hemisphere, not one each
         else:
             caps.append(name)
     products = ['sigma0', 'gamma0'] if args.calOutput == 'both' else [args.calOutput]
@@ -568,10 +584,20 @@ def main():
             if name in tileVrts:
                 gdal.BuildVRT(f'{args.work}/vrt/{product}/cap_{name}.vrt',
                               [f'{args.work}/vrt/{product}/{name}.vrt'], srcNodata=NODATA, VRTNodata=NODATA)
-        gdal.BuildVRT(f'{args.work}/vrt/{product}/global.vrt', bandVrts, resolution='user',
-                      xRes=args.res, yRes=args.res, resampleAlg='nearest',
-                      srcNodata=NODATA, VRTNodata=NODATA)
-        log(f'{product}: {len(tileVrts)} tile VRTs, {len(bandVrts)} band VRTs, global.vrt', summary)
+        # EASE-Grid tiles all share one CRS and grid, so one VRT covers the hemisphere
+        easeVrts = [f'{args.work}/vrt/{product}/{n}.vrt' for n in ease if n in tileVrts]
+        if easeVrts:
+            epsg = grids[jobs[0][2]]['epsg'] if jobs else ''
+            gdal.BuildVRT(f'{args.work}/vrt/{product}/ease_{epsg}.vrt', easeVrts,
+                          resolution='user', xRes=args.psResM, yRes=args.psResM,
+                          srcNodata=NODATA, VRTNodata=NODATA)
+        # an EASE or cap-only run has no latitude bands, so there is no global lat/lon VRT
+        if bandVrts:
+            gdal.BuildVRT(f'{args.work}/vrt/{product}/global.vrt', bandVrts, resolution='user',
+                          xRes=args.res, yRes=args.res, resampleAlg='nearest',
+                          srcNodata=NODATA, VRTNodata=NODATA)
+        log(f'{product}: {len(tileVrts)} tile VRTs, {len(bandVrts)} band VRTs'
+            f'{", global.vrt" if bandVrts else ""}{f", ease_{epsg}.vrt" if easeVrts else ""}', summary)
     log(f'done; {len(failed)} failed job(s){": " + ", ".join(os.path.basename(f) for f in failed) if failed else ""}',
         summary)
     return 1 if failed else 0
