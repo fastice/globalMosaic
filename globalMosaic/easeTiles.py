@@ -147,19 +147,46 @@ def globalBoxes(tileM, extent):
             yield f'X{i:+03d}Y{j:+03d}', box(i * tileM, j * tileM, (i + 1) * tileM, (j + 1) * tileM)
 
 
-def selectForBox(epsg, tileBox, cands, marginKm, cellM, minNewFrac, forced=(), target=None):
+def projectCandidates(crs, cands):
+    ''' Project every footprint ONCE, and keep its projected bounds for a cheap per-tile
+    reject. selectForBox used to reproject all of them for every box: O(boxes x granules)
+    shapely transforms, measured at 1.0-1.3 s per box against 5,631 granules, which the fill
+    catalogues would take to ~42,000. '''
+    fwd = pyproj.Transformer.from_crs(4326, crs, always_xy=True).transform
+    out = []
+    for g in cands:
+        try:
+            geom = transform(fwd, shape(g['raw'])).buffer(0)
+        except Exception:
+            continue
+        if geom.is_empty:
+            continue
+        out.append(dict(g, projGeom=geom))
+    bounds = np.array([g['projGeom'].bounds for g in out]) if out else np.zeros((0, 4))
+    return out, bounds
+
+
+def selectForBox(epsg, tileBox, cands, marginKm, cellM, minNewFrac, forced=(), target=None,
+                 bounds=None):
     ''' Greedy cover of one projected tile, rasterised in metres on its own grid. '''
-    fwd = pyproj.Transformer.from_crs(4326, epsg, always_xy=True).transform
     pad = marginKm * 1000.
     x0, y0, x1, y1 = tileBox.bounds
     padded = box(x0 - pad, y0 - pad, x1 + pad, y1 + pad)
     nx = max(int(round((x1 - x0 + 2 * pad) / cellM)), 1)
     ny = max(int(round((y1 - y0 + 2 * pad) / cellM)), 1)
     tr = from_origin(x0 - pad, y1 + pad, (x1 - x0 + 2 * pad) / nx, (y1 - y0 + 2 * pad) / ny)
+    if bounds is not None and len(bounds):
+        # bounding boxes that cannot touch this tile, dropped before any geometry work
+        hit = ((bounds[:, 0] <= x1 + pad) & (bounds[:, 2] >= x0 - pad) &
+               (bounds[:, 1] <= y1 + pad) & (bounds[:, 3] >= y0 - pad))
+        cands = [g for g, h in zip(cands, hit) if h]
+    fwd = None if cands and 'projGeom' in cands[0] else \
+        pyproj.Transformer.from_crs(4326, epsg, always_xy=True).transform
     masks = []
     for g in cands:
         try:
-            part = transform(fwd, shape(g['raw'])).buffer(0).intersection(padded)
+            geom = g['projGeom'] if fwd is None else transform(fwd, shape(g['raw'])).buffer(0)
+            part = geom.intersection(padded)
         except Exception:
             continue
         if part.is_empty:
@@ -257,6 +284,7 @@ def main():
     else:
         print(f'{len(cands)} candidate granules, global', flush=True)
 
+    cands, projBounds = projectCandidates(crs, cands)
     feats, used, nTiles = [], set(), 0
     if isGlobal:
         ex = globalExtent(crs)
@@ -268,7 +296,7 @@ def main():
           ('' if isGlobal else f', out to {args.extentKm:g} km'), flush=True)
     for k, (name, b) in enumerate(boxes, 1):
         picks, cover, nAvail = selectForBox(crs, b, cands, args.marginKm, args.cellM,
-                                            args.minNewFrac)
+                                            args.minNewFrac, bounds=projBounds)
         if not picks:
             continue
         nTiles += 1

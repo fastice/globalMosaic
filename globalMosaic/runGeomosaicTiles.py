@@ -271,13 +271,16 @@ class Progress:
     '''
     RES, CAPRES = 0.1, 5000.       # progress image spacing: deg for lat/lon tiles, m for caps
 
-    def __init__(self, work, feats, jobs, grids, product, dbMin=-24., dbMax=-1.):
+    def __init__(self, work, feats, jobs, grids, product, dbMin=-24., dbMax=-1., projCRS=None):
         # grey stretch of the stored int16 values / 100 (dB for backscatter; 0-100 = coherence 0-1)
         self.dbMin, self.dbMax = dbMin, dbMax
         self.dir, self.total, self.done, self.failed = f'{work}/quicklooks', len(jobs), 0, 0
         self.t0, self.pieces, self.caps = time.time(), [], {}
         os.makedirs(f'{self.dir}/progress', exist_ok=True)
         self.planned = {j[0]: (grids[j[2]]['tile'], grids[j[2]]['epsg']) for j in jobs}
+        # the projection the tiles are on, for drawProjected's coastlines (the caller
+        # resolves it, since a CRS given as -wkt is a file this class never sees)
+        self.projCRS = projCRS
         self.failedTiles = set()
 
     def addJob(self, name, grp, tif):
@@ -300,6 +303,59 @@ class Progress:
             self.failed += 1
             self.failedTiles.add(name)
 
+    def drawProjected(self, stem, text):
+        ''' One panel in the run's OWN projection, for a tiling that is entirely projected
+        (EASE-Grid, Equal Earth, Wagner VII). The lat/lon + polar-cap figure below cannot
+        show those at all -- every tile lands in the cap panels and the main panel comes out
+        empty, which reads as a blank outline. Here the tiles are already on one shared grid,
+        so the finished ones mosaic directly and the planned ones are drawn as outlines. '''
+        import matplotlib
+        matplotlib.use('Agg')
+        import matplotlib.pyplot as plt
+        from matplotlib.patches import Rectangle
+        bounds = np.array([b for b, _ in self.planned.values()])      # w, s, e, n in metres
+        ext = [bounds[:, 0].min(), bounds[:, 2].max(), bounds[:, 1].min(), bounds[:, 3].max()]
+        fig, ax = plt.subplots(figsize=(18, 10))
+        done = [t for v in self.caps.values() for t in v if os.path.exists(t)]
+        if done:
+            vrt = gdal.BuildVRT(f'{self.dir}/{stem}.vrt', done, VRTNodata=NODATA)
+            if vrt is not None:
+                vrt.FlushCache()
+                a = vrt.ReadAsArray().astype('f4')
+                del vrt
+                gt = gdal.Open(f'{self.dir}/{stem}.vrt').GetGeoTransform()
+                ny, nx = a.shape[-2:]
+                a = a if a.ndim == 2 else a[0]
+                g = np.clip((a / 100. - self.dbMin) / (self.dbMax - self.dbMin), 0., 1.)
+                rgba = np.dstack([g, g, g, np.where(a == NODATA, 0., 1.)])
+                ax.imshow(rgba, extent=[gt[0], gt[0] + nx * gt[1],
+                                        gt[3] + ny * gt[5], gt[3]], interpolation='nearest')
+        for name, (b, _) in self.planned.items():
+            colour = '#cc0000' if name in self.failedTiles else '#3366cc'
+            ax.add_patch(Rectangle((b[0], b[1]), b[2] - b[0], b[3] - b[1], fill=False,
+                                   edgecolor=colour, linewidth=0.4))
+        # coastlines: the FORWARD direction, which every one of these projections has
+        try:
+            import pyproj
+            crs = self.projCRS or 'EPSG:4326'
+            fwd = pyproj.Transformer.from_crs(4326, crs, always_xy=True).transform
+            for lon, lat in coastlines():
+                x, y = fwd(lon, lat)
+                x, y = np.asarray(x), np.asarray(y)
+                bad = ~np.isfinite(x) | ~np.isfinite(y) | (np.abs(np.diff(x, prepend=x[0])) > 2e6)
+                x[bad], y[bad] = np.nan, np.nan
+                ax.plot(x, y, color='#333', linewidth=0.4)
+        except Exception:
+            pass
+        ax.set_xlim(ext[:2]), ax.set_ylim(ext[2:])
+        ax.set_aspect('equal')
+        ax.set_xticks([]), ax.set_yticks([])
+        fig.suptitle(f'{text}\nfinished tiles shown, planned outlined blue, failed red',
+                     fontsize=13)
+        fig.tight_layout()
+        fig.savefig(f'{self.dir}/{stem}.png', dpi=100)
+        plt.close(fig)
+
     def draw(self, stem='progress'):
         el = time.time() - self.t0
         rateN = getattr(self, 'etaDone', self.done)
@@ -307,6 +363,11 @@ class Progress:
         text = (f'{time.strftime("%m-%d %H:%M:%S")}  jobs done {self.done} of {self.total} '
                 f'({self.failed} failed); elapsed {el / 3600:.2f} h; ETA '
                 + (f'{eta / 3600:.2f} h' if eta == eta else 'n/a'))
+        if self.planned and all(e != 4326 for _, e in self.planned.values()):
+            self.drawProjected(stem, text)
+            with open(f'{self.dir}/{stem}.txt', 'w') as fp:
+                fp.write(text + '\n')
+            return
         rgb, alpha = self.globalRGBA()
         # mid latitudes 60S..60N in lat/lon; poleward of 60 in polar stereographic
         i60 = int(round(30 / self.RES))
@@ -531,7 +592,13 @@ def main():
 
     failed = []
     s3Keys = S3Keys() if args.granules == 's3' else None
-    progress = Progress(args.work, feats, jobs, grids, products[-1])
+    # the run's CRS as a string pyproj can take: EPSG code, or the contents of the wkt file
+    g0 = grids[jobs[0][2]] if jobs else {}
+    if g0.get('wkt'):
+        projCRS = open(os.path.abspath(f'{args.tileRun}/{g0["wkt"]}')).read()
+    else:
+        projCRS = f'EPSG:{g0["epsg"]}' if g0.get('epsg') else None
+    progress = Progress(args.work, feats, jobs, grids, products[-1], projCRS=projCRS)
     lastDraw = time.time()
     with concurrent.futures.ThreadPoolExecutor(args.nProc) as pool:
         # biggest jobs (most granules) first: a long one started last would set the finish time
