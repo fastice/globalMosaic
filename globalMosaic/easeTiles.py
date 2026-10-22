@@ -52,6 +52,12 @@ from shapely.ops import transform
 from .globalGCOVTiles import greedyCover, loadGranules, rasterTarget, writeTile
 
 EPSG = {'north': 6931, 'south': 6932}
+# A global equal-area alternative with no EPSG code, passed to geomosaic as -wkt. Equal Earth is
+# pseudocylindrical: straight parallels, curved meridians, area preserved. PROJ has its inverse,
+# so geomosaic takes it through GP_GENERIC with no new C code -- unlike Wagner VII, which has no
+# inverse at all. The extent below is the full map, 34488 x 16786 km.
+GLOBAL_CRS = '+proj=eqearth +lon_0=0 +datum=WGS84 +units=m +no_defs'
+GLOBAL_X, GLOBAL_Y = 17243959.0, 8392928.0
 # LAEA radius of the equator: R * sqrt(2) on the authalic sphere, 9009.96 km on WGS84
 EQUATOR_M = 9009964.76
 
@@ -69,6 +75,16 @@ def tileBoxes(extentM, tileM):
             if near > disc:
                 continue
             yield f'X{i:+03d}Y{j:+03d}', b
+
+
+def globalBoxes(tileM):
+    ''' (name, box) over the whole map rectangle. Tiles outside the projection's lens are
+    dropped later, when no granule footprint lands in them. '''
+    nx = int(math.ceil(GLOBAL_X / tileM))
+    ny = int(math.ceil(GLOBAL_Y / tileM))
+    for j in range(-ny, ny):
+        for i in range(-nx, nx):
+            yield f'X{i:+03d}Y{j:+03d}', box(i * tileM, j * tileM, (i + 1) * tileM, (j + 1) * tileM)
 
 
 def selectForBox(epsg, tileBox, cands, marginKm, cellM, minNewFrac, forced=(), target=None):
@@ -116,7 +132,11 @@ def main():
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument('--catalogue', required=True, help='granule catalogue.geojson')
-    ap.add_argument('--hemisphere', choices=['north', 'south'], required=True)
+    ap.add_argument('--hemisphere', choices=['north', 'south', 'global'], required=True,
+                    help="north/south: EASE-Grid 2.0 polar (EPSG 6931/6932). global: --crs over "
+                         "the whole map, written as proj.wkt and passed to geomosaic with -wkt")
+    ap.add_argument('--crs', default=GLOBAL_CRS,
+                    help='--hemisphere global only: any CRS PROJ can invert [Equal Earth]')
     ap.add_argument('--out', required=True, help='output directory')
     ap.add_argument('--tileKm', type=float, default=600.,
                     help='tile size, km (600 ~ 5.4 deg, like the 6x6 deg lat/lon tiles) [600]')
@@ -129,22 +149,35 @@ def main():
     ap.add_argument('--allowV', action='store_true', help='also use V-only granules')
     args = ap.parse_args()
 
-    epsg = EPSG[args.hemisphere]
+    isGlobal = args.hemisphere == 'global'
+    epsg = 0 if isGlobal else EPSG[args.hemisphere]
+    crs = args.crs if isGlobal else f'EPSG:{epsg}'
     tileM, extentM = args.tileKm * 1000., args.extentKm * 1000.
     os.makedirs(f'{args.out}/tiles', exist_ok=True)
+    wktName = None
+    if isGlobal:
+        # geomosaic takes -wkt <file> for a CRS with no EPSG code (geomosaic.c resolveOutputProjGeo)
+        import pyproj
+        wktName = 'proj.wkt'
+        with open(f'{args.out}/{wktName}', 'w') as fp:
+            fp.write(pyproj.CRS.from_user_input(crs).to_wkt() + '\n')
+        print(f'wrote {args.out}/{wktName} for {crs}', flush=True)
     cands = loadGranules(args.catalogue, allowV=args.allowV)
-    # keep only granules in this hemisphere (a footprint straddling the equator stays)
-    sign = 1 if args.hemisphere == 'north' else -1
-    cands = [g for g in cands
-             if sign * shape(g['raw']).bounds[3] > 0 or sign * shape(g['raw']).bounds[1] > 0]
-    print(f'{len(cands)} candidate granules in the {args.hemisphere}ern hemisphere', flush=True)
+    if not isGlobal:
+        # keep only granules in this hemisphere (a footprint straddling the equator stays)
+        sign = 1 if args.hemisphere == 'north' else -1
+        cands = [g for g in cands
+                 if sign * shape(g['raw']).bounds[3] > 0 or sign * shape(g['raw']).bounds[1] > 0]
+        print(f'{len(cands)} candidate granules in the {args.hemisphere}ern hemisphere', flush=True)
+    else:
+        print(f'{len(cands)} candidate granules, global', flush=True)
 
     feats, used, nTiles = [], set(), 0
-    boxes = list(tileBoxes(extentM, tileM))
-    print(f'{len(boxes)} tiles meet the hemisphere ({args.tileKm:g} km, out to {args.extentKm:g} km)',
-          flush=True)
+    boxes = list(globalBoxes(tileM) if isGlobal else tileBoxes(extentM, tileM))
+    print(f'{len(boxes)} candidate tiles ({args.tileKm:g} km)' +
+          ('' if isGlobal else f', out to {args.extentKm:g} km'), flush=True)
     for k, (name, b) in enumerate(boxes, 1):
-        picks, cover, nAvail = selectForBox(epsg, b, cands, args.marginKm, args.cellM,
+        picks, cover, nAvail = selectForBox(crs, b, cands, args.marginKm, args.cellM,
                                             args.minNewFrac)
         if not picks:
             continue
@@ -154,8 +187,8 @@ def main():
         bw = {}
         for g, _ in picks:
             bw[str(g['bw'])] = bw.get(str(g['bw']), 0) + 1
-        feats.append(dict(type='Feature', geometry=mapping(outline(epsg, b)),
-                          properties=dict(name=name, kind='ease', epsg=epsg,
+        feats.append(dict(type='Feature', geometry=mapping(outline(crs, b)),
+                          properties=dict(name=name, kind='ease', epsg=epsg, wkt=wktName,
                                           xMin=x0, yMin=y0, xMax=x1, yMax=y1,
                                           lonMult=None, height=None, width=None,
                                           available=nAvail,

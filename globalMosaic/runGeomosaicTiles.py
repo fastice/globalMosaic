@@ -119,7 +119,7 @@ def tileGrid(props, geom, res, psResM, featherKm):
         y0 = math.floor(props['yMin'] / psResM) * psResM - pad * psResM
         nx = int(round((props['xMax'] - props['xMin']) / psResM)) + 2 * pad
         ny = int(round((props['yMax'] - props['yMin']) / psResM)) + 2 * pad
-        return dict(epsg=props['epsg'], unit=1000.,
+        return dict(epsg=props['epsg'], unit=1000., wkt=props.get('wkt'),
                     tile=(props['xMin'], props['yMin'], props['xMax'], props['yMax']),
                     dx=psResM, dy=psResM, x0=x0, y0=y0, nx=nx, ny=ny,
                     fl=round(featherKm * 1000. / psResM))
@@ -276,7 +276,10 @@ class Progress:
 
     def addJob(self, name, grp, tif):
         out = f'{self.dir}/progress/{name}.{grp}.tif'
-        epsg = int(gdal.Open(tif).GetSpatialRef().GetAuthorityCode(None))
+        # A CRS with no EPSG code (Equal Earth, given with -wkt) has no authority code at all,
+        # so treat anything that is not plain lat/lon as a projected grid in metres.
+        code = gdal.Open(tif).GetSpatialRef().GetAuthorityCode(None)
+        epsg = int(code) if code is not None else 0
         r = self.RES if epsg == 4326 else self.CAPRES
         gdal.Translate(out, tif, xRes=r, yRes=r, resampleAlg='average', noData=NODATA)
         if epsg == 4326:
@@ -506,7 +509,11 @@ def main():
                '-int16', '-calOutput', args.calOutput, '-ompThreads', '1']
     if args.date1 and args.date2:
         cmdBase += ['-date1', args.date1, '-date2', args.date2]
-    jobCmd = lambda jobDir: cmdBase + ['-fl', str(grids[jobDir]['fl']), '-epsg', str(grids[jobDir]['epsg'])]
+    def jobCmd(jobDir):
+        g = grids[jobDir]
+        crs = (['-wkt', os.path.abspath(f'{args.tileRun}/{g["wkt"]}')] if g.get('wkt')
+               else ['-epsg', str(g['epsg'])])
+        return cmdBase + ['-fl', str(g['fl'])] + crs
     log(f'{len(feats)} tiles ({len(caps)} polar stereographic caps), {len(jobs)} jobs, {args.nProc} '
         f'processes, res {args.res * 3600:.2f} arcsec / caps {args.psResM:.0f} m, {args.calOutput}; '
         f'granules {args.granules}', summary)
@@ -587,7 +594,8 @@ def main():
         # EASE-Grid tiles all share one CRS and grid, so one VRT covers the hemisphere
         easeVrts = [f'{args.work}/vrt/{product}/{n}.vrt' for n in ease if n in tileVrts]
         if easeVrts:
-            epsg = grids[jobs[0][2]]['epsg'] if jobs else ''
+            g0 = grids[jobs[0][2]] if jobs else {}
+            epsg = g0.get('epsg') or os.path.splitext(g0.get('wkt') or 'proj')[0]
             gdal.BuildVRT(f'{args.work}/vrt/{product}/ease_{epsg}.vrt', easeVrts,
                           resolution='user', xRes=args.psResM, yRes=args.psResM,
                           srcNodata=NODATA, VRTNodata=NODATA)
