@@ -40,7 +40,11 @@ for H in $HEMIS; do
             easeTiles --catalogue "$CAT" --hemisphere "$H" --tileKm "$TILEKM" --out "$T"
         fi
         echo "=== $(date) $H: mosaicking at ${RES} m, $NPROC jobs ==="
-        runGeomosaicTiles "$T" --work "$W" --granules "$GRANULES" --psResM "$RES" --nProc "$NPROC"
+        # runGeomosaicTiles exits 1 if ANY tile failed. Over hundreds of remote jobs a transient
+        # failure is likely, and set -e would then abandon the quick looks and the other
+        # hemisphere. Failed tiles are retried on the next run, so carry on and say so.
+        runGeomosaicTiles "$T" --work "$W" --granules "$GRANULES" --psResM "$RES" --nProc "$NPROC" \
+            || echo "  WARNING: $H had failed tiles (see $W/summary.log); continuing -- rerun to retry them"
     fi
 
     echo "=== $(date) $H: quick look ==="
