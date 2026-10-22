@@ -24,6 +24,11 @@ Tiles
   in the lat/lon product.
 
 Selection (per tile)
+  --direction A or D restricts to one orbit direction, as globalGCOVTiles' flag does. Worth
+  using: every candidate is reprojected and rasterised for every box, so the tiling cost is
+  proportional to the catalogue size (measured 2.1-2.7 s per box against 11,386 granules).
+
+
   As globalGCOVTiles, but rasterised in metres on the tile's own projected grid rather than in
   degrees: the tile padded by --marginKm is rasterised at --cellM, candidates are ranked in tiers
   by bandwidth (77 -> 40 -> 20 -> 5 MHz), and a greedy set cover adds the granule covering the
@@ -146,6 +151,8 @@ def main():
     ap.add_argument('--cellM', type=float, default=2000., help='selection raster cell, m [2000]')
     ap.add_argument('--minNewFrac', type=float, default=0.001,
                     help='stop adding granules below this new-cell fraction [0.001]')
+    ap.add_argument('--direction', choices=['A', 'D', 'both'], default='both',
+                    help='orbit direction from the file name [both]')
     ap.add_argument('--allowV', action='store_true', help='also use V-only granules')
     args = ap.parse_args()
 
@@ -173,6 +180,10 @@ def main():
     else:
         epsg = EPSG[args.hemisphere]
     cands = loadGranules(args.catalogue, allowV=args.allowV)
+    if args.direction != 'both':
+        n = len(cands)
+        cands = [g for g in cands if g['direction'] == args.direction]
+        print(f'direction {args.direction}: {len(cands)} of {n} granules', flush=True)
     if not isGlobal:
         # keep only granules in this hemisphere (a footprint straddling the equator stays)
         sign = 1 if args.hemisphere == 'north' else -1

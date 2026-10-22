@@ -7,6 +7,7 @@
 #   RES=500 NPROC=24 bash test/runEaseMosaic.sh         # finer, more jobs
 #   GRANULES=/Volumes/insar4/ian/Data/NISAR/Antarctica-GCOV bash test/runEaseMosaic.sh
 #   HEMIS=south bash test/runEaseMosaic.sh              # one hemisphere only
+#   DIRECTION=both bash test/runEaseMosaic.sh            # both orbit directions [A]
 #   QLONLY=1 bash test/runEaseMosaic.sh                 # redo the quick looks, skip mosaicking
 #
 # Resumable: tiling is skipped when tiles.geojson exists, and runGeomosaicTiles skips finished
@@ -26,6 +27,7 @@ DBMIN=${DBMIN:--24}              # stretch, dB
 DBMAX=${DBMAX:--1}
 HEMIS=${HEMIS:-south north}
 QLONLY=${QLONLY:-0}
+DIRECTION=${DIRECTION:-A}         # A, D or both; ascending, as the Google Earth product is
 
 mkdir -p "$ROOT/quicklooks"
 
@@ -37,7 +39,8 @@ for H in $HEMIS; do
             echo "=== $(date) $H: tiling exists, skipping ==="
         else
             echo "=== $(date) $H: tiling ($TILEKM km tiles) ==="
-            easeTiles --catalogue "$CAT" --hemisphere "$H" --tileKm "$TILEKM" --out "$T"
+            easeTiles --catalogue "$CAT" --hemisphere "$H" --tileKm "$TILEKM" \
+                      --direction "$DIRECTION" --out "$T"
         fi
         echo "=== $(date) $H: mosaicking at ${RES} m, $NPROC jobs ==="
         # runGeomosaicTiles exits 1 if ANY tile failed. Over hundreds of remote jobs a transient
