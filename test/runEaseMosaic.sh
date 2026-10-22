@@ -8,6 +8,8 @@
 #   GRANULES=/Volumes/insar4/ian/Data/NISAR/Antarctica-GCOV bash test/runEaseMosaic.sh
 #   HEMIS=south bash test/runEaseMosaic.sh              # one hemisphere only
 #   DIRECTION=both bash test/runEaseMosaic.sh            # both orbit directions [A]
+#   HEMIS=global bash test/runEaseMosaic.sh              # one global map, Equal Earth
+#   HEMIS=global CRS=EPSG:6933 bash test/runEaseMosaic.sh  # ... in EASE-Grid 2.0 Global instead
 #   QLONLY=1 bash test/runEaseMosaic.sh                 # redo the quick looks, skip mosaicking
 #
 # Resumable: tiling is skipped when tiles.geojson exists, and runGeomosaicTiles skips finished
@@ -28,6 +30,11 @@ DBMAX=${DBMAX:--1}
 HEMIS=${HEMIS:-south north}
 QLONLY=${QLONLY:-0}
 DIRECTION=${DIRECTION:-A}         # A, D or both; ascending, as the Google Earth product is
+# --hemisphere global only. Empty = easeTiles' default, Equal Earth, which has no EPSG code and
+# so reaches geomosaic as -wkt: that needs the GP_GENERIC SRS support (installGeomosaic builds
+# it). EPSG:6933 (EASE-Grid 2.0 Global, cylindrical equal-area) is also equal-area and goes in
+# as -epsg, which every geomosaic understands -- no rebuild.
+CRS=${CRS:-}
 
 mkdir -p "$ROOT/quicklooks"
 
@@ -39,8 +46,10 @@ for H in $HEMIS; do
             echo "=== $(date) $H: tiling exists, skipping ==="
         else
             echo "=== $(date) $H: tiling ($TILEKM km tiles) ==="
+            crsArg=()
+            [ "$H" = global ] && [ -n "$CRS" ] && crsArg=(--crs "$CRS")
             easeTiles --catalogue "$CAT" --hemisphere "$H" --tileKm "$TILEKM" \
-                      --direction "$DIRECTION" --out "$T"
+                      --direction "$DIRECTION" "${crsArg[@]}" --out "$T"
         fi
         echo "=== $(date) $H: mosaicking at ${RES} m, $NPROC jobs ==="
         # runGeomosaicTiles exits 1 if ANY tile failed. Over hundreds of remote jobs a transient
