@@ -150,18 +150,28 @@ def main():
     args = ap.parse_args()
 
     isGlobal = args.hemisphere == 'global'
-    epsg = 0 if isGlobal else EPSG[args.hemisphere]
-    crs = args.crs if isGlobal else f'EPSG:{epsg}'
+    crs = args.crs if isGlobal else f'EPSG:{EPSG[args.hemisphere]}'
     tileM, extentM = args.tileKm * 1000., args.extentKm * 1000.
     os.makedirs(f'{args.out}/tiles', exist_ok=True)
-    wktName = None
+    wktName, epsg = None, 0
     if isGlobal:
-        # geomosaic takes -wkt <file> for a CRS with no EPSG code (geomosaic.c resolveOutputProjGeo)
         import pyproj
-        wktName = 'proj.wkt'
-        with open(f'{args.out}/{wktName}', 'w') as fp:
-            fp.write(pyproj.CRS.from_user_input(crs).to_wkt() + '\n')
-        print(f'wrote {args.out}/{wktName} for {crs}', flush=True)
+        c = pyproj.CRS.from_user_input(crs)
+        code = c.to_authority()
+        # Prefer the EPSG code when the CRS has one (EPSG:6933): geomosaic then takes -epsg, which
+        # every build understands. Only a CRS with no code (Equal Earth) needs -wkt, and that
+        # needs grimpSRSString's GP_GENERIC branch and gcovMosaic's outputSRS.
+        if code is not None and code[0] == 'EPSG':
+            epsg = int(code[1])
+            print(f'{crs} -> EPSG:{epsg}, passed to geomosaic with -epsg', flush=True)
+        else:
+            wktName = 'proj.wkt'
+            with open(f'{args.out}/{wktName}', 'w') as fp:
+                fp.write(c.to_wkt() + '\n')
+            print(f'{crs} has no EPSG code: wrote {args.out}/{wktName}, passed with -wkt\n'
+                  f'  (needs a geomosaic with the GP_GENERIC SRS fixes)', flush=True)
+    else:
+        epsg = EPSG[args.hemisphere]
     cands = loadGranules(args.catalogue, allowV=args.allowV)
     if not isGlobal:
         # keep only granules in this hemisphere (a footprint straddling the equator stays)
