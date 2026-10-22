@@ -53,6 +53,7 @@ Outputs (--out DIR)
   --psResM spacing on the tile's projected bounds.
 '''
 import argparse
+import functools
 import json
 import math
 import os
@@ -96,9 +97,14 @@ def tileBoxes(extentM, tileM):
             yield f'X{i:+03d}Y{j:+03d}', b
 
 
+@functools.lru_cache(maxsize=8)
 def isWagner7(crs):
+    ''' Asked once per tile outline, so it is cached and does NOT go through to_proj4():
+    that is lossy and pyproj warns about it every single call, which buried the tiling log
+    in thousands of identical warnings. The projection method name says it directly. '''
     try:
-        return '+proj=wag7' in pyproj.CRS.from_user_input(crs).to_proj4()
+        op = pyproj.CRS.from_user_input(crs).coordinate_operation
+        return op is not None and 'wagner' in op.method_name.lower()
     except Exception:
         return False
 
