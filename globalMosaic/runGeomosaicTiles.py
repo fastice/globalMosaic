@@ -221,7 +221,13 @@ def runJob(jobDir, cmdBase, products, retries=2, s3Keys=None):
                # each open, so the (unsigned) ASF URLs in the list do not expire mid-job
                GDAL_HTTP_NETRC='YES', GDAL_HTTP_COOKIEFILE=f'{jobDir}/cookies',
                GDAL_HTTP_COOKIEJAR=f'{jobDir}/cookies', GDAL_DISABLE_READDIR_ON_OPEN='EMPTY_DIR',
-               GDAL_HTTP_MAX_RETRY='5', GDAL_HTTP_RETRY_DELAY='10')
+               GDAL_HTTP_MAX_RETRY='5', GDAL_HTTP_RETRY_DELAY='10',
+               # 4 MB vsicurl chunks: measured 8.37 MB/s per stream against ASF vs 7.1 at
+               # GDAL's 16 kB default, the best of 1/4/16 MB (bench/benchmarkASFRead.py).
+               # GDAL_NUM_THREADS=ALL_CPUS added another 4% single-stream and is deliberately
+               # NOT set here -- with --nProc jobs in flight it would oversubscribe the box,
+               # which is also why OMP/OPENBLAS are pinned to 1 above.
+               CPL_VSIL_CURL_CHUNK_SIZE='4194304')
     t0 = time.time()
     for attempt in range(retries + 1):
         if s3Keys is not None:

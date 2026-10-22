@@ -7,6 +7,15 @@ mosaic, in the same form globalGCOVTiles writes for the lat/lon product.
   easeTiles --catalogue cycle30/catalogue.geojson --hemisphere north --tileKm 600 --out ease/north
 
 Projection
+  --hemisphere global takes any equal-area CRS through --crs:
+    ESRI:54076   Wagner VII, the lens-shaped whole-Earth map. PROJ has its forward and NO
+                 inverse, so geomosaic needs the GP_WAGNER7 support in grimpProj.c (and the
+                 outlines here use this module's own wagner7Inverse).
+    EPSG:6933    EASE-Grid 2.0 Global, cylindrical. Has an EPSG code, so it reaches geomosaic
+                 as -epsg and needs nothing special of it.
+    +proj=eqearth  Equal Earth. No EPSG code: passed as -wkt, which needs grimpSRSString's
+                 GP_GENERIC branch. This is the default for --hemisphere global.
+
   EPSG:6931 (north) / EPSG:6932 (south): Lambert azimuthal equal-area on WGS84, centred on the
   pole, zero false easting/northing. geomosaic accepts them -- grimpProjFromSRS classifies them
   as projected/non-conformal, which is usable for positions (a backscatter mosaic); only vx/vy
@@ -48,6 +57,7 @@ import json
 import math
 import os
 
+import numpy as np
 import pyproj
 from rasterio import features
 from rasterio.transform import from_origin
@@ -62,7 +72,11 @@ EPSG = {'north': 6931, 'south': 6932}
 # so geomosaic takes it through GP_GENERIC with no new C code -- unlike Wagner VII, which has no
 # inverse at all. The extent below is the full map, 34488 x 16786 km.
 GLOBAL_CRS = '+proj=eqearth +lon_0=0 +datum=WGS84 +units=m +no_defs'
-GLOBAL_X, GLOBAL_Y = 17243959.0, 8392928.0
+# Wagner VII (ESRI:54076) constants, the same ones mosaicSource/common/grimpProj.c uses.
+# PROJ has the forward but NO INVERSE, so the inverse is written out here in closed form --
+# (x/KX R, y/KY R) are equatorial Lambert azimuthal equal-area coordinates, which Snyder
+# 24-16 inverts directly. PROJ treats the CRS as spherical with R = the semi-major axis.
+W7 = dict(sin65=0.90630778703664996, kx=2.66723, ky=1.24104, R=6378137.0)
 # LAEA radius of the equator: R * sqrt(2) on the authalic sphere, 9009.96 km on WGS84
 EQUATOR_M = 9009964.76
 
@@ -82,11 +96,52 @@ def tileBoxes(extentM, tileM):
             yield f'X{i:+03d}Y{j:+03d}', b
 
 
-def globalBoxes(tileM):
+def isWagner7(crs):
+    try:
+        return '+proj=wag7' in pyproj.CRS.from_user_input(crs).to_proj4()
+    except Exception:
+        return False
+
+
+def wagner7Inverse(x, y, lon0=0.):
+    ''' Closed-form Wagner VII inverse, the twin of wagner7Inverse() in grimpProj.c. PROJ
+    cannot do this direction at all, so pyproj returns inf and every outline would be lost. '''
+    u = np.asarray(x, float) / (W7['R'] * W7['kx'])
+    v = np.asarray(y, float) / (W7['R'] * W7['ky'])
+    rho = np.hypot(u, v)
+    c = 2. * np.arcsin(np.clip(rho / 2., -1., 1.))
+    with np.errstate(invalid='ignore', divide='ignore'):
+        st = np.where(rho > 0, v * np.sin(c) / np.where(rho > 0, rho, 1.) / W7['sin65'], 0.)
+        lam = np.where(rho > 0, np.arctan2(u * np.sin(c), rho * np.cos(c)), 0.)
+    lon = lon0 + 3. * np.degrees(lam)
+    lat = np.degrees(np.arcsin(np.clip(st, -1., 1.)))
+    # A tile box can reach into the empty corners outside the lens, where there is no
+    # latitude or longitude at all; clamp those to the limb so an outline stays a closed
+    # ring, but keep them inside -180..180 (they ran to -397 before).
+    lon = (lon + 180.) % 360. - 180.
+    return np.where(rho > 2., np.clip(lon, -180., 180.), lon), lat
+
+
+def globalExtent(crs, step=1.):
+    ''' Half-width and half-height of the whole-world map, from the projection itself rather
+    than a table: the graticule is projected and the extremes taken. Hardcoding Equal Earth's
+    numbers put an EPSG:6933 grid 371 rows past that projection's south edge. '''
+    fwd = pyproj.Transformer.from_crs(4326, crs, always_xy=True).transform
+    lon, lat = np.meshgrid(np.arange(-180., 180. + step, step),
+                           np.arange(-90., 90. + step, step))
+    x, y = fwd(lon.ravel(), lat.ravel())
+    x, y = np.asarray(x), np.asarray(y)
+    good = np.isfinite(x) & np.isfinite(y)
+    if not good.any():
+        raise SystemExit(f'easeTiles: cannot project the graticule into {crs}')
+    return float(np.abs(x[good]).max()), float(np.abs(y[good]).max())
+
+
+def globalBoxes(tileM, extent):
     ''' (name, box) over the whole map rectangle. Tiles outside the projection's lens are
     dropped later, when no granule footprint lands in them. '''
-    nx = int(math.ceil(GLOBAL_X / tileM))
-    ny = int(math.ceil(GLOBAL_Y / tileM))
+    nx = int(math.ceil(extent[0] / tileM))
+    ny = int(math.ceil(extent[1] / tileM))
     for j in range(-ny, ny):
         for i in range(-nx, nx):
             yield f'X{i:+03d}Y{j:+03d}', box(i * tileM, j * tileM, (i + 1) * tileM, (j + 1) * tileM)
@@ -124,7 +179,8 @@ def selectForBox(epsg, tileBox, cands, marginKm, cellM, minNewFrac, forced=(), t
 def outline(epsg, tileBox, nSeg=12):
     ''' The tile's lat/lon outline, densified so the LAEA curvature shows, clipped to its
     hemisphere (points beyond the equator have no meaning for this grid). '''
-    inv = pyproj.Transformer.from_crs(epsg, 4326, always_xy=True).transform
+    inv = (wagner7Inverse if isWagner7(epsg)
+           else pyproj.Transformer.from_crs(epsg, 4326, always_xy=True).transform)
     try:
         ll = transform(inv, tileBox.segmentize(min(tileBox.bounds[2] - tileBox.bounds[0],
                                                    tileBox.bounds[3] - tileBox.bounds[1]) / nSeg))
@@ -151,6 +207,9 @@ def main():
     ap.add_argument('--cellM', type=float, default=2000., help='selection raster cell, m [2000]')
     ap.add_argument('--minNewFrac', type=float, default=0.001,
                     help='stop adding granules below this new-cell fraction [0.001]')
+    ap.add_argument('--fillCatalogues', nargs='+', default=[],
+                    help='catalogues of other cycles, used in the order given, only where the '
+                         'main catalogue leaves a tile uncovered (as globalGCOVTiles)')
     ap.add_argument('--direction', choices=['A', 'D', 'both'], default='both',
                     help='orbit direction from the file name [both]')
     ap.add_argument('--allowV', action='store_true', help='also use V-only granules')
@@ -180,6 +239,11 @@ def main():
     else:
         epsg = EPSG[args.hemisphere]
     cands = loadGranules(args.catalogue, allowV=args.allowV)
+    for k, fc in enumerate(args.fillCatalogues, 1):
+        cands += loadGranules(fc, allowV=args.allowV, fill=k)
+    if args.fillCatalogues:
+        print(f'{len(cands)} granules including {len(args.fillCatalogues)} fill catalogue(s)',
+              flush=True)
     if args.direction != 'both':
         n = len(cands)
         cands = [g for g in cands if g['direction'] == args.direction]
@@ -194,7 +258,12 @@ def main():
         print(f'{len(cands)} candidate granules, global', flush=True)
 
     feats, used, nTiles = [], set(), 0
-    boxes = list(globalBoxes(tileM) if isGlobal else tileBoxes(extentM, tileM))
+    if isGlobal:
+        ex = globalExtent(crs)
+        print(f'{crs}: map half-extent {ex[0] / 1000.:.0f} x {ex[1] / 1000.:.0f} km', flush=True)
+        boxes = list(globalBoxes(tileM, ex))
+    else:
+        boxes = list(tileBoxes(extentM, tileM))
     print(f'{len(boxes)} candidate tiles ({args.tileKm:g} km)' +
           ('' if isGlobal else f', out to {args.extentKm:g} km'), flush=True)
     for k, (name, b) in enumerate(boxes, 1):

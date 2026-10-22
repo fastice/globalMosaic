@@ -21,7 +21,7 @@ CAT=${CAT:-cycle30/catalogue.geojson}
 ROOT=${ROOT:-/scratch/ianj/mosaics/ease}
 RES=${RES:-1000}                 # output spacing, m
 TILEKM=${TILEKM:-600}            # tile size, km (~5.4 deg, like the 6x6 deg lat/lon tiles)
-NPROC=${NPROC:-16}
+NPROC=${NPROC:-32}       # geomosaic sits near 30% CPU: it waits on the network, so oversubscribe
 GRANULES=${GRANULES:-vsicurl}
 PRODUCT=${PRODUCT:-gamma0}
 QLPX=${QLPX:-1800}               # quick-look width in pixels (about screen size)
@@ -35,6 +35,11 @@ DIRECTION=${DIRECTION:-A}         # A, D or both; ascending, as the Google Earth
 # it). EPSG:6933 (EASE-Grid 2.0 Global, cylindrical equal-area) is also equal-area and goes in
 # as -epsg, which every geomosaic understands -- no rebuild.
 CRS=${CRS:-}
+# Granules from other cycles, used ONLY where the main catalogue leaves a tile uncovered --
+# the same mechanism the Google Earth product used (globalGCOVTiles --fillCatalogues). One
+# cycle of ascending NISAR does not cover the Earth: cycle30 alone left the Sahara and much
+# of the sea ice empty. Set to "" for a single-cycle run.
+FILLCATS=${FILLCATS:-cycle30/catalogue029.geojson cycle30/catalogue028.geojson cycle30/catalogue025.geojson cycle30/catalogue024.geojson cycle30/catalogue023.geojson cycle30/catalogue031.geojson cycle30/catalogue026.geojson cycle30/catalogue027.geojson}
 
 mkdir -p "$ROOT/quicklooks"
 
@@ -48,8 +53,10 @@ for H in $HEMIS; do
             echo "=== $(date) $H: tiling ($TILEKM km tiles) ==="
             crsArg=()
             [ "$H" = global ] && [ -n "$CRS" ] && crsArg=(--crs "$CRS")
+            fillArg=()
+            [ -n "$FILLCATS" ] && fillArg=(--fillCatalogues $FILLCATS)
             easeTiles --catalogue "$CAT" --hemisphere "$H" --tileKm "$TILEKM" \
-                      --direction "$DIRECTION" "${crsArg[@]}" --out "$T"
+                      --direction "$DIRECTION" "${crsArg[@]}" "${fillArg[@]}" --out "$T"
         fi
         echo "=== $(date) $H: mosaicking at ${RES} m, $NPROC jobs ==="
         # runGeomosaicTiles exits 1 if ANY tile failed. Over hundreds of remote jobs a transient
@@ -70,12 +77,14 @@ for H in $HEMIS; do
     fi
     vrt=$ROOT/quicklooks/$H.vrt
     gdalbuildvrt -q -overwrite "$vrt" "${tifs[@]}"
-    # int16 dB x 100 -> byte; nodata -3000 becomes 0 (black) because JPEG has no alpha
-    gdal_translate -q -of JPEG -ot Byte -outsize "$QLPX" 0 \
+    # int16 dB x 100 -> byte; nodata -3000 becomes 0 (black) because JPEG has no alpha.
+    # -r average, not the default nearest: the quicklook decimates ~20x and NISAR coverage is
+    # narrow strips, so nearest keeps one pixel in 400 and thins the map for no reason.
+    gdal_translate -q -of JPEG -ot Byte -outsize "$QLPX" 0 -r average \
         -scale $((DBMIN * 100)) $((DBMAX * 100)) 1 255 \
         "$vrt" "$ROOT/quicklooks/$H.jpg"
     # ... and a PNG, where no-data stays transparent
-    gdal_translate -q -of PNG -ot Byte -outsize "$QLPX" 0 -a_nodata 0 \
+    gdal_translate -q -of PNG -ot Byte -outsize "$QLPX" 0 -a_nodata 0 -r average \
         -scale $((DBMIN * 100)) $((DBMAX * 100)) 1 255 \
         "$vrt" "$ROOT/quicklooks/$H.png"
     echo "  ${#tifs[@]} tiles -> $ROOT/quicklooks/$H.jpg (+ .png, $QLPX px wide)"

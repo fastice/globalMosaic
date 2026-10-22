@@ -34,6 +34,10 @@
 set -euo pipefail
 
 GITROOT="${GEOMOSAIC_GITROOT:-$HOME/progs/GIT64}"
+# Whether the root was CHOSEN or merely defaulted to. A defaulted root that does not exist
+# gets a sanity check below before anything is cloned into it.
+GITROOT_EXPLICIT=${GEOMOSAIC_GITROOT:+1}
+GITROOT_EXPLICIT=${GITROOT_EXPLICIT:-0}
 BINDIR="${GEOMOSAIC_BINDIR:-$HOME/bin/$(uname -m)}"
 FORCE_BRANCH=""
 PROTO=https
@@ -75,7 +79,7 @@ note() { echo "==> $*"; }
 
 while [ $# -gt 0 ]; do
     case "$1" in
-        --gitroot)    GITROOT="$2"; shift 2 ;;
+        --gitroot)    GITROOT="$2"; GITROOT_EXPLICIT=1; shift 2 ;;
         --bindir)     BINDIR="$2"; shift 2 ;;
         --branch)     FORCE_BRANCH="$2"; shift 2 ;;
         --ssh)        PROTO=ssh; shift ;;
@@ -189,6 +193,22 @@ note "gdal headers : $GDALINC  (exported as C_INCLUDE_PATH)"
 note "hdf5 headers : $HDF5INC"
 note "hdf5 library : $HDF5LIB"
 # ---------------------------------------------------------------- clone / pull
+# $HOME is not always where the source lives. On a machine whose home directory is separate
+# from the volume holding progs/ (petermann: $HOME=/home/ian, sources in /Users/ian/progs),
+# defaulting blindly clones a SECOND copy of all six repos and then builds that one, so edits
+# in the real tree appear to have no effect. Only guess when the default root has no repos
+# yet, and only refuse when a populated tree is sitting somewhere obvious.
+if [ "$GITROOT_EXPLICIT" = 0 ] && [ ! -d "$GITROOT/mosaicSource/.git" ]; then
+    for alt in "/Users/$(id -un)/progs/GIT64" "$HOME/GIT64" "$(dirname "$PWD")/GIT64"; do
+        if [ "$alt" != "$GITROOT" ] && [ -d "$alt/mosaicSource/.git" ]; then
+            die "no repositories in the default root $GITROOT, but a GrIMP source tree exists at
+    $alt
+  Cloning a second copy there would build source that is not the one you edit. Re-run as
+    installGeomosaic --gitroot $alt
+  or set GEOMOSAIC_GITROOT. Pass --gitroot $GITROOT to clone a fresh tree there anyway."
+        fi
+    done
+fi
 mkdir -p "$GITROOT"
 note "repository root: $GITROOT"
 
@@ -272,10 +292,23 @@ makeArgs=()
 [ -n "$HDF5INC" ] && makeArgs+=("HDF5INCLUDE=$HDF5INC")
 [ -n "$HDF5LIB" ] && makeArgs+=("HDF5LIB=$HDF5LIB")
 [ -n "$GDALLIBS" ] && makeArgs+=("GDAL=$GDALLIBS")
+buildLog="$(mktemp)"
 make -C "$GITROOT/mosaicSource" -j"$JOBS" geomosaic \
      ROOTDIR="$(dirname "$GITROOT")" \
      PROGDIR="$GITROOT" \
-     BINDIR="$BINDIR" "${makeArgs[@]}"
+     BINDIR="$BINDIR" "${makeArgs[@]}" 2>&1 | tee "$buildLog"
+
+# The top-level make does NOT propagate a sub-make's failure: a file that fails to compile
+# prints "make[1]: *** [...] Error 1", make still exits 0, and the link then quietly reuses
+# the previous object file. The result is a binary that builds "successfully" without the
+# change you just made -- which is a very expensive thing to debug. Fail on it.
+if grep -qE '^(g?make)(\[[0-9]+\])?: \*\*\*' "$buildLog"; then
+    echo "installGeomosaic: the build reported errors:" >&2
+    grep -B2 -E '^(g?make)(\[[0-9]+\])?: \*\*\*' "$buildLog" | sed 's/^/    /' >&2
+    rm -f "$buildLog"
+    die "not installing a binary built from stale objects. Fix the errors above and re-run."
+fi
+rm -f "$buildLog"
 
 [ -x "$BINDIR/geomosaic" ] || die "build finished but $BINDIR/geomosaic is not there"
 
