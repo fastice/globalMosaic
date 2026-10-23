@@ -26,7 +26,16 @@ TILEKM=${TILEKM:-600}
 RES=${RES:-1000}                 # output spacing, m
 NPROC=${NPROC:-32}
 DIRECTION=${DIRECTION:-A}
-CAT=${CAT:-cycle${CYCLE}gunw/catalogue.geojson}
+# The catalogue directory is named either way round in practice -- cycle30gunw beside
+# cycle024gunw -- so accept both rather than silently re-searching ASF for one that is there.
+SHORT=$((10#$CYCLE))
+CAT=${CAT:-}
+if [ -z "$CAT" ]; then
+    for d in "cycle${CYCLE}gunw" "cycle${SHORT}gunw"; do
+        if [ -f "$d/catalogue.geojson" ]; then CAT=$d/catalogue.geojson; break; fi
+    done
+    CAT=${CAT:-cycle${CYCLE}gunw/catalogue.geojson}
+fi
 W=$ROOT/cycle$CYCLE
 T=$W/tiles-global
 
