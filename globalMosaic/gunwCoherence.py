@@ -141,7 +141,19 @@ def mosaicTile(job):
     ''' One geomosaic -geo run over a tile's coherence files. '''
     name, grid, files, jobDir, out, geomosaic, crs = job
     if os.path.exists(out):
-        return name, 0, 0., 'skipped (done)'
+        # Skip only if the tile was built from the SAME granules it would use now. A tile
+        # built while some granules were still missing -- ASF refused their open, or the
+        # tiling has since gained granules -- would otherwise be kept forever, because the
+        # output exists. That is how a mosaic ends up with a band its catalogue covers.
+        old = []
+        if os.path.exists(f'{jobDir}/coh.yaml'):
+            old = [l.strip()[2:] for l in open(f'{jobDir}/coh.yaml') if l.startswith('  - ')]
+        if set(old) == set(files):
+            return name, 0, 0., 'skipped (done)'
+        os.remove(out)
+        note = f'rebuilding: {len(files) - len(old):+d} granule(s) since it was built'
+    else:
+        note = ''
     os.makedirs(jobDir, exist_ok=True)
     with open(f'{jobDir}/coh.yaml', 'w') as fp:
         fp.write('band: 1\nfiles:\n')
@@ -173,7 +185,7 @@ def mosaicTile(job):
         return name, rc or 1, time.time() - t0, f'FAILED rc={rc}'
     os.makedirs(os.path.dirname(out), exist_ok=True)
     cropFloat(raw[0], out, grid)
-    return name, 0, time.time() - t0, f'{len(files)} granule(s)'
+    return name, 0, time.time() - t0, f'{len(files)} granule(s) {note}'.strip()
 
 
 def main():
