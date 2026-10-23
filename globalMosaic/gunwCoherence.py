@@ -8,9 +8,11 @@ lat/lon, EASE-Grid, Equal Earth or Wagner VII.
 
 Two stages, both resumable:
 
-  1. extract   each granule's frequency-A coherence (HH, else VV) to <cache>/<name>.coh.tif
-               in the granule's own CRS. Done once per granule however many tiles use it.
-  2. mosaic    one `geomosaic -geo` per tile over those files, then crop to the tile.
+  1. describe  a ~1.5 kB VRT per granule (<cache>/<name>.coh.vrt) that points at its
+               frequency-A coherence (HH, else VV) WHERE IT SITS at ASF, carrying the
+               geotransform and CRS the HDF5 subdataset does not report. No pixel is copied.
+  2. mosaic    one `geomosaic -geo` per tile over those VRTs, then crop to the tile.
+               geomosaic reads windows over the network, exactly as it does for GCOV.
 
 Why geomosaic rather than the gdal.Warp loop in mosaicCoherence: warping INTO the tile CRS
 needs that CRS's inverse, and Wagner VII has none in PROJ. geomosaic carries its own Wagner
@@ -52,8 +54,19 @@ def httpSetup(cookieDir):
         gdal.SetConfigOption(k, v)
 
 
-def extractOne(job):
-    ''' One granule's coherence to a GeoTIFF in its own CRS. Returns (name, note). '''
+def makeVrt(job):
+    """
+    A VRT that points at the granule's coherence where it sits, at ASF.
+
+    The array itself is never copied: GDAL can open
+    HDF5:"/vsicurl/<url>"://<layer>/<pol>/coherenceMagnitude directly, but a NISAR GUNW carries
+    its geolocation in sibling xCoordinates/yCoordinates arrays, so that subdataset comes back
+    with an identity geotransform and no CRS -- unusable as a geomosaic -geo input. This reads
+    only those coordinate arrays and the epsg (a few kB) and writes a ~1.5 kB VRT carrying the
+    geotransform and projection. geomosaic then reads windows over the network exactly as it
+    does for GCOV, instead of 20 MB per granule being downloaded and stored (89 GB for one
+    cycle). Verified bit-identical to a locally extracted GeoTIFF over a test window.
+    """
     name, url, out, cookieDir = job
     if os.path.exists(out):
         return name, 'cached'
@@ -66,32 +79,37 @@ def extractOne(job):
         pols = [p for p in ('HH', 'VV', 'HV', 'VH') if p in g.GetGroupNames()]
         if not pols:
             return name, 'no polarization group'
-        coh = g.OpenGroup(pols[0]).OpenMDArray('coherenceMagnitude').ReadAsArray()
-        if not np.isfinite(coh).any():
-            return name, 'all NaN'
+        arr = g.OpenGroup(pols[0]).OpenMDArray('coherenceMagnitude')
+        ny, nx = [d.GetSize() for d in arr.GetDimensions()]
         xs = g.OpenMDArray('xCoordinates').ReadAsArray()
         ys = g.OpenMDArray('yCoordinates').ReadAsArray()
         epsg = int(g.OpenMDArray('projection').GetAttribute('epsg_code').Read())
     except Exception as e:
         return name, f'read failed: {str(e)[:120]}'
-    dx, dy = xs[1] - xs[0], ys[1] - ys[0]
+    dx, dy = float(xs[1] - xs[0]), float(ys[1] - ys[0])
     srs = osr.SpatialReference()
     srs.ImportFromEPSG(epsg)
     srs.SetAxisMappingStrategy(osr.OAMS_TRADITIONAL_GIS_ORDER)
+    # LAYER has a leading slash and the subdataset syntax supplies its own: "://" + "science/..."
+    sub = f'HDF5:"/vsicurl/{url}"://{LAYER.lstrip("/")}/{pols[0]}/coherenceMagnitude'
+    vrt = (f'<VRTDataset rasterXSize="{nx}" rasterYSize="{ny}">\n'
+           f'  <SRS>{srs.ExportToWkt()}</SRS>\n'
+           f'  <GeoTransform>{xs[0] - dx / 2.}, {dx}, 0, {ys[0] - dy / 2.}, 0, {dy}</GeoTransform>\n'
+           f'  <VRTRasterBand dataType="Float32" band="1">\n'
+           f'    <NoDataValue>nan</NoDataValue>\n'
+           f'    <SimpleSource>\n'
+           f'      <SourceFilename relativeToVRT="0">{sub}</SourceFilename>\n'
+           f'      <SourceBand>1</SourceBand>\n'
+           f'      <SrcRect xOff="0" yOff="0" xSize="{nx}" ySize="{ny}"/>\n'
+           f'      <DstRect xOff="0" yOff="0" xSize="{nx}" ySize="{ny}"/>\n'
+           f'    </SimpleSource>\n'
+           f'  </VRTRasterBand>\n</VRTDataset>\n')
     os.makedirs(os.path.dirname(out), exist_ok=True)
-    tmp = out + '.tmp.tif'
-    drv = gdal.GetDriverByName('GTiff')
-    d = drv.Create(tmp, coh.shape[1], coh.shape[0], 1, gdal.GDT_Float32,
-                   options=['TILED=YES', 'COMPRESS=DEFLATE', 'PREDICTOR=3', 'BIGTIFF=IF_SAFER'])
-    d.SetGeoTransform((xs[0] - dx / 2., dx, 0., ys[0] - dy / 2., 0., dy))
-    d.SetProjection(srs.ExportToWkt())
-    b = d.GetRasterBand(1)
-    b.WriteArray(coh.astype('f4'))
-    b.SetNoDataValue(float('nan'))
-    d.FlushCache()
-    del d
+    tmp = out + '.tmp'
+    with open(tmp, 'w') as fp:
+        fp.write(vrt)
     os.replace(tmp, out)
-    return name, f'{coh.shape[1]}x{coh.shape[0]} EPSG:{epsg} {pols[0]} {time.time() - t0:.0f}s'
+    return name, f'{nx}x{ny} EPSG:{epsg} {pols[0]} {time.time() - t0:.0f}s"""'.replace('"""', '')
 
 
 def mosaicTile(job):
@@ -114,7 +132,14 @@ def mosaicTile(job):
     cmd = [geomosaic, '-GTiff', '-ompThreads', '1', '-fl', str(grid['fl'])] + crs + \
           ['-geo', 'coh.yaml', 'inputFile', 'none', 'out']
     t0 = time.time()
-    env = dict(os.environ, OPENBLAS_NUM_THREADS='1', OMP_NUM_THREADS='1')
+    cookies = os.path.abspath(os.path.join(os.path.dirname(jobDir), '..', 'cookies', 'cookies'))
+    env = dict(os.environ, OPENBLAS_NUM_THREADS='1', OMP_NUM_THREADS='1',
+               # the VRTs resolve to /vsicurl/, so the child needs the Earthdata login,
+               # the cookie jar for its redirect, and the 4 MB chunk size the ASF benchmark
+               # settled on (bench/benchmarkASFRead.py)
+               GDAL_HTTP_NETRC='YES', GDAL_HTTP_COOKIEFILE=cookies, GDAL_HTTP_COOKIEJAR=cookies,
+               GDAL_DISABLE_READDIR_ON_OPEN='EMPTY_DIR', GDAL_HTTP_MAX_RETRY='5',
+               GDAL_HTTP_RETRY_DELAY='10', CPL_VSIL_CURL_CHUNK_SIZE='4194304')
     with open(f'{jobDir}/log', 'w') as fp:
         rc = subprocess.run(cmd, cwd=jobDir, env=env, stdout=fp,
                             stderr=subprocess.STDOUT).returncode
@@ -164,13 +189,17 @@ def main():
             urls[r['name']] = r['url']
     log(f'{len(feats)} tile(s), {len(urls)} distinct granule(s)', summary)
 
-    todo = [(n, u, f'{cache}/{n}.coh.tif', f'{args.work}/cookies')
-            for n, u in sorted(urls.items()) if not os.path.exists(f'{cache}/{n}.coh.tif')]
-    log(f'stage 1: {len(todo)} granule(s) to extract, {len(urls) - len(todo)} cached', summary)
+    todo = [(n, u, f'{cache}/{n}.coh.vrt', f'{args.work}/cookies')
+            for n, u in sorted(urls.items()) if not os.path.exists(f'{cache}/{n}.coh.vrt')]
+    log(f'stage 1: {len(todo)} granule(s) to describe, {len(urls) - len(todo)} cached', summary)
     bad = 0
     if todo:
-        with concurrent.futures.ThreadPoolExecutor(args.nProc) as pool:
-            for k, (name, note) in enumerate(pool.map(extractOne, todo), 1):
+        # PROCESSES, not threads. GDAL serialises every HDF5 access behind one global lock
+        # (libhdf5 is not built thread-safe), so N threads read one granule at a time and the
+        # whole stage runs at single-stream speed -- measured at 24 MB/s against ASF, where
+        # the GCOV mosaic reaches ~1 GB/s precisely because it forks 32 geomosaic processes.
+        with concurrent.futures.ProcessPoolExecutor(args.nProc) as pool:
+            for k, (name, note) in enumerate(pool.map(makeVrt, todo), 1):
                 if not note.endswith('s') and note not in ('cached',):
                     bad += 1
                     log(f'  [{k}/{len(todo)}] {name}: {note}', summary)
@@ -185,7 +214,7 @@ def main():
     for f in feats:
         p = f['properties']
         name = p['name']
-        files = [f'{cache}/{n}.coh.tif' for n in want.get(name, [])]
+        files = [f'{cache}/{n}.coh.vrt' for n in want.get(name, [])]
         files = [x for x in files if os.path.exists(x)]
         if not files:
             continue
