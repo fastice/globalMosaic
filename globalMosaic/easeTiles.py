@@ -243,6 +243,16 @@ def main():
     ap.add_argument('--cellM', type=float, default=2000., help='selection raster cell, m [2000]')
     ap.add_argument('--minNewFrac', type=float, default=0.001,
                     help='stop adding granules below this new-cell fraction [0.001]')
+    ap.add_argument('--validFootprints', nargs='+', default=None,
+                    help='geojson(s) of each granule VALID-DATA footprint (scanMasks writes '
+                         'them), as globalGCOVTiles takes. Without them a granule is chosen on '
+                         'its ACQUISITION footprint, which overstates: ground a frame did not '
+                         'actually fill counts as covered, the granule that does hold it is '
+                         'dropped as redundant, and a band of no data is left along the frame '
+                         'boundary -- at the same latitudes on every track, so a band across '
+                         'the map. The Google Earth product has always used these.')
+    ap.add_argument('--minValid', type=float, default=0.05,
+                    help='with --validFootprints: drop granules with less valid data [0.05]')
     ap.add_argument('--keepFrom', default=None,
                     help='an earlier tiling directory: every tile keeps exactly the granules it '
                          'already had and only gains more, so re-mosaicking redoes just the '
