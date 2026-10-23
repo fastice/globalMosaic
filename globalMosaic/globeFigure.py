@@ -119,7 +119,12 @@ def main():
     with np.errstate(invalid='ignore'):
         g = np.clip((grey / 100. - args.dbMin) / (args.dbMax - args.dbMin), 0., 1.)
     rgba = np.dstack([g, g, g, np.where(np.isfinite(g), 1., 0.)])
-    ax.imshow(rgba, extent=ext, interpolation='nearest', zorder=3)
+    im = ax.imshow(rgba, extent=ext, interpolation='nearest', zorder=3)
+    # Clip to the map: tiles built before the Wagner VII inverse rejected |lon| > 180 carry a
+    # mirrored sliver of data outside the lens, and nothing outside it is meaningful anyway.
+    from matplotlib.patches import Polygon
+    im.set_clip_path(Polygon(np.column_stack([bx, by]), closed=True,
+                             transform=ax.transData, facecolor='none', edgecolor='none'))
     ax.plot(bx, by, color=args.edge, linewidth=0.8, zorder=4)
     ax.set_xlim(bx.min(), bx.max())
     ax.set_ylim(by.min(), by.max())

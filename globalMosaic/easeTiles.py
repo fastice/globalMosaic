@@ -123,11 +123,12 @@ def wagner7Inverse(x, y, lon0=0.):
         lam = np.where(rho > 0, np.arctan2(u * np.sin(c), rho * np.cos(c)), 0.)
     lon = lon0 + 3. * np.degrees(lam)
     lat = np.degrees(np.arcsin(np.clip(st, -1., 1.)))
-    # A tile box can reach into the empty corners outside the lens, where there is no
-    # latitude or longitude at all; clamp those to the limb so an outline stays a closed
-    # ring, but keep them inside -180..180 (they ran to -397 before).
-    lon = (lon + 180.) % 360. - 180.
-    return np.where(rho > 2., np.clip(lon, -180., 180.), lon), lat
+    # Outside the lens the formula gives |lon| > 180. WRAPPING that (lon % 360) is wrong and
+    # was a real bug: it sends a point just past the edge to the far side of the world, which
+    # is how data came to be painted beyond the map boundary. grimpProj.c rejects such pixels
+    # outright; here they are clamped to the boundary meridian so an outline stays a closed
+    # ring on the edge of the map.
+    return np.clip(lon, lon0 - 180., lon0 + 180.), lat
 
 
 def globalExtent(crs, step=1.):
