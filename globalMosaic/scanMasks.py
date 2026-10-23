@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 '''
-Valid-data footprints of GCOV granules from their masks, for the tiler.
+Valid-data footprints of GCOV or GUNW granules, for the tiler.
 
   scanMasks cycle30/catalogue.geojson --out cycle30/validFootprints.geojson [--all] [--threads 16]
 
@@ -10,6 +10,15 @@ partial frame at the start of a datatake can be entirely mask 0, so it covers no
 footprint says otherwise. For each granule (partial frames `_P_` only, unless --all) this reads
 frequency A's mask (or B's, when A is absent) every --stride pixels over https, polygonizes the
 valid part and writes it in EPSG:4326 with validFrac (valid share of the in-swath samples).
+For a GUNW there is no mask: the frequency-A coherence is NaN wherever there is no data, and
+that is polygonised instead. Every GUNW has empty margins, so scan them all (--all), not only
+the partial frames.
+
+Why this matters: the tiler's greedy cover believes ground is covered as soon as some
+granule's ACQUISITION footprint spans it. If that granule holds no data there, the granule
+that does is then redundant and is dropped -- leaving a hole along the frame boundary, at the
+same latitudes on every track, i.e. a band across the map.
+
 Resumable: granules already in --out are skipped.
 '''
 import argparse
@@ -38,22 +47,43 @@ def validFootprint(url, stride):
         gdal.SetThreadLocalConfigOption(k, v)
     ds = gdal.OpenEx('/vsicurl/' + url, gdal.OF_MULTIDIM_RASTER)
     root = ds.GetRootGroup()
-    g = None
+    g, kind = None, None
     for freq in ('A', 'B'):
         try:
             g = root.OpenGroupFromFullname(f'/science/LSAR/GCOV/grids/frequency{freq}')
+            kind = 'GCOV'
             break
         except Exception:
             continue
+    if g is None:
+        # A GUNW has no mask array: its coherence is simply NaN where there is no data, which
+        # is the same thing the mask expresses for a GCOV.
+        for freq in ('A', 'B'):
+            try:
+                g = root.OpenGroupFromFullname(
+                    f'/science/LSAR/GUNW/grids/frequency{freq}/unwrappedInterferogram')
+                kind = 'GUNW'
+                break
+            except Exception:
+                continue
     if g is None:
         return None, 0.
     xs = g.OpenMDArray('xCoordinates').ReadAsArray()
     ys = g.OpenMDArray('yCoordinates').ReadAsArray()
     epsg = int(g.OpenMDArray('projection').GetAttribute('epsg_code').Read())
-    m = g.OpenMDArray('mask').GetView(f'[::{stride},::{stride}]').ReadAsArray()
-    inSwath = m != 255
-    valid = inSwath & (m != 0)
-    frac = float(valid.sum() / max(inSwath.sum(), 1))
+    if kind == 'GCOV':
+        m = g.OpenMDArray('mask').GetView(f'[::{stride},::{stride}]').ReadAsArray()
+        inSwath = m != 255
+        valid = inSwath & (m != 0)
+        frac = float(valid.sum() / max(inSwath.sum(), 1))
+    else:
+        pols = [p for p in ('HH', 'VV', 'HV', 'VH') if p in g.GetGroupNames()]
+        if not pols:
+            return None, 0.
+        c = g.OpenGroup(pols[0]).OpenMDArray('coherenceMagnitude') \
+             .GetView(f'[::{stride},::{stride}]').ReadAsArray()
+        valid = np.isfinite(c)
+        frac = float(valid.mean())
     if not valid.any():
         return None, frac
     dx, dy = (xs[1] - xs[0]) * stride, (ys[1] - ys[0]) * stride
