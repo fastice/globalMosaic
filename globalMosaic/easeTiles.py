@@ -292,6 +292,23 @@ def main():
         n = len(cands)
         cands = [g for g in cands if g['direction'] == args.direction]
         print(f'direction {args.direction}: {len(cands)} of {n} granules', flush=True)
+    if args.validFootprints:
+        # select on where a granule HAS data, not merely where it was acquired
+        vf = {f['properties']['name']: f for path in args.validFootprints
+              for f in json.load(open(path))['features']}
+        keep, dropped, trimmed = [], 0, 0
+        for g in cands:
+            v = vf.get(g['name'])
+            if v is not None:
+                if v['geometry'] is None or v['properties'].get('validFrac', 1.) < args.minValid:
+                    dropped += 1
+                    continue
+                g = dict(g, raw=v['geometry'])
+                trimmed += 1
+            keep.append(g)
+        cands = keep
+        print(f'valid footprints: {trimmed} granule(s) trimmed to their valid area, '
+              f'{dropped} dropped as empty, {len(cands)} left', flush=True)
     if not isGlobal:
         # keep only granules in this hemisphere (a footprint straddling the equator stays)
         sign = 1 if args.hemisphere == 'north' else -1
