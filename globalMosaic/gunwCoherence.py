@@ -43,14 +43,27 @@ gdal.UseExceptions()
 LAYER = '/science/LSAR/GUNW/grids/frequencyA/unwrappedInterferogram'
 
 
-def httpSetup(cookieDir):
-    ''' Earthdata login over https, as mosaicCoherence does: the redirect needs a cookie jar. '''
+def httpSetup(cookieDir, chunk=None):
+    '''
+    Earthdata login over https: the redirect needs a cookie jar.
+
+    `chunk` sets CPL_VSIL_CURL_CHUNK_SIZE, and the right value depends entirely on the access
+    pattern. 4 MB is best for the large sequential window reads geomosaic does (measured
+    8.37 MB/s per stream against ASF, bench/benchmarkASFRead.py). It is badly wrong for
+    describing a granule: HDF5 metadata is scattered small reads, and each one then drags a
+    whole 4 MB chunk -- 22.1 MB per granule against 0.5 MB at the 16 kB default, measured on
+    one granule step by step. Over a cycle that is 92 GB instead of 2 GB, which is what 150
+    MB/s during a metadata-only stage turned out to be. So: default here, 4 MB in the
+    geomosaic child.
+    '''
     os.makedirs(cookieDir, exist_ok=True)
     cookies = os.path.join(cookieDir, 'cookies')
-    for k, v in (('GDAL_HTTP_NETRC', 'YES'), ('GDAL_HTTP_COOKIEFILE', cookies),
-                 ('GDAL_HTTP_COOKIEJAR', cookies), ('GDAL_DISABLE_READDIR_ON_OPEN', 'EMPTY_DIR'),
-                 ('GDAL_HTTP_MAX_RETRY', '5'), ('GDAL_HTTP_RETRY_DELAY', '10'),
-                 ('CPL_VSIL_CURL_CHUNK_SIZE', '4194304')):
+    opts = [('GDAL_HTTP_NETRC', 'YES'), ('GDAL_HTTP_COOKIEFILE', cookies),
+            ('GDAL_HTTP_COOKIEJAR', cookies), ('GDAL_DISABLE_READDIR_ON_OPEN', 'EMPTY_DIR'),
+            ('GDAL_HTTP_MAX_RETRY', '5'), ('GDAL_HTTP_RETRY_DELAY', '10')]
+    if chunk:
+        opts.append(('CPL_VSIL_CURL_CHUNK_SIZE', str(chunk)))
+    for k, v in opts:
         gdal.SetConfigOption(k, v)
 
 
