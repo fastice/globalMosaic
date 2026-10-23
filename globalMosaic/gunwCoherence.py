@@ -72,20 +72,32 @@ def makeVrt(job):
         return name, 'cached'
     httpSetup(cookieDir)
     t0 = time.time()
-    try:
-        ds = gdal.OpenEx('/vsicurl/' + url, gdal.OF_MULTIDIM_RASTER)
-        g = ds.GetRootGroup().OpenGroupFromFullname(LAYER)
-        # HH if it is there, else VV: a GUNW is single-pol per frequency and either can occur
-        pols = [p for p in ('HH', 'VV', 'HV', 'VH') if p in g.GetGroupNames()]
-        if not pols:
-            return name, 'no polarization group'
-        arr = g.OpenGroup(pols[0]).OpenMDArray('coherenceMagnitude')
-        ny, nx = [d.GetSize() for d in arr.GetDimensions()]
-        xs = g.OpenMDArray('xCoordinates').ReadAsArray()
-        ys = g.OpenMDArray('yCoordinates').ReadAsArray()
-        epsg = int(g.OpenMDArray('projection').GetAttribute('epsg_code').Read())
-    except Exception as e:
-        return name, f'read failed: {str(e)[:120]}'
+    # Retry: with many processes opening HDF5 over https at once, ASF refuses some of them,
+    # and a granule that fails here is silently absent from the mosaic. The same granule
+    # opens perfectly seconds later, so the failures are the server's rate limit rather than
+    # bad data -- 2,900 into one cycle 24 run, hundreds failed and every one retried cleanly.
+    err = ''
+    for attempt in range(4):
+        try:
+            ds = gdal.OpenEx('/vsicurl/' + url, gdal.OF_MULTIDIM_RASTER)
+            g = ds.GetRootGroup().OpenGroupFromFullname(LAYER)
+            # HH if there, else VV: a GUNW is single-pol per frequency and either can occur
+            pols = [p for p in ('HH', 'VV', 'HV', 'VH') if p in g.GetGroupNames()]
+            if not pols:
+                return name, 'no polarization group'
+            arr = g.OpenGroup(pols[0]).OpenMDArray('coherenceMagnitude')
+            ny, nx = [d.GetSize() for d in arr.GetDimensions()]
+            xs = g.OpenMDArray('xCoordinates').ReadAsArray()
+            ys = g.OpenMDArray('yCoordinates').ReadAsArray()
+            epsg = int(g.OpenMDArray('projection').GetAttribute('epsg_code').Read())
+            break
+        except Exception as e:
+            err = str(e).replace('\n', ' ')
+            if attempt < 3:
+                time.sleep(10 * (attempt + 1))
+    else:
+        # the message is long and ends with the useful part, so keep the tail, not the head
+        return name, f'read failed after 4 attempts: ...{err[-160:]}'
     dx, dy = float(xs[1] - xs[0]), float(ys[1] - ys[0])
     srs = osr.SpatialReference()
     srs.ImportFromEPSG(epsg)
