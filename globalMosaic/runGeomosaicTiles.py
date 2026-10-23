@@ -271,9 +271,14 @@ class Progress:
     '''
     RES, CAPRES = 0.1, 5000.       # progress image spacing: deg for lat/lon tiles, m for caps
 
-    def __init__(self, work, feats, jobs, grids, product, dbMin=-24., dbMax=-1., projCRS=None):
+    def __init__(self, work, feats, jobs, grids, product, dbMin=-24., dbMax=-1., projCRS=None,
+                 scale=100., nodata=NODATA):
         # grey stretch of the stored int16 values / 100 (dB for backscatter; 0-100 = coherence 0-1)
         self.dbMin, self.dbMax = dbMin, dbMax
+        # the stored values divided by `scale` are what dbMin/dbMax refer to: 100 for the
+        # int16 dB x 100 backscatter tiles, 1 for a linear product such as coherence, whose
+        # tiles are Float32 with NaN rather than -3000 for no data
+        self.scale, self.nodata = scale, nodata
         self.dir, self.total, self.done, self.failed = f'{work}/quicklooks', len(jobs), 0, 0
         self.t0, self.pieces, self.caps = time.time(), [], {}
         os.makedirs(f'{self.dir}/progress', exist_ok=True)
@@ -290,7 +295,7 @@ class Progress:
         code = gdal.Open(tif).GetSpatialRef().GetAuthorityCode(None)
         epsg = int(code) if code is not None else 0
         r = self.RES if epsg == 4326 else self.CAPRES
-        gdal.Translate(out, tif, xRes=r, yRes=r, resampleAlg='average', noData=NODATA)
+        gdal.Translate(out, tif, xRes=r, yRes=r, resampleAlg='average', noData=self.nodata)
         if epsg == 4326:
             # frequency B pieces go first, so A is painted over them
             self.pieces.insert(0, out) if grp.startswith('B') else self.pieces.append(out)
@@ -318,7 +323,7 @@ class Progress:
         fig, ax = plt.subplots(figsize=(18, 10))
         done = [t for v in self.caps.values() for t in v if os.path.exists(t)]
         if done:
-            vrt = gdal.BuildVRT(f'{self.dir}/{stem}.vrt', done, VRTNodata=NODATA)
+            vrt = gdal.BuildVRT(f'{self.dir}/{stem}.vrt', done, VRTNodata=self.nodata)
             if vrt is not None:
                 vrt.FlushCache()
                 a = vrt.ReadAsArray().astype('f4')
@@ -326,8 +331,9 @@ class Progress:
                 gt = gdal.Open(f'{self.dir}/{stem}.vrt').GetGeoTransform()
                 ny, nx = a.shape[-2:]
                 a = a if a.ndim == 2 else a[0]
-                g = np.clip((a / 100. - self.dbMin) / (self.dbMax - self.dbMin), 0., 1.)
-                rgba = np.dstack([g, g, g, np.where(a == NODATA, 0., 1.)])
+                g = np.clip((a / self.scale - self.dbMin) / (self.dbMax - self.dbMin), 0., 1.)
+                have = np.isfinite(a) & (a != self.nodata)
+                rgba = np.dstack([g, g, g, np.where(have, 1., 0.)])
                 ax.imshow(rgba, extent=[gt[0], gt[0] + nx * gt[1],
                                         gt[3] + ny * gt[5], gt[3]], interpolation='nearest')
         for name, (b, _) in self.planned.items():

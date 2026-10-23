@@ -37,7 +37,7 @@ import numpy as np
 from osgeo import gdal, osr
 
 from .mosaicStatistics import cropFloat
-from .runGeomosaicTiles import log, tileGrid
+from .runGeomosaicTiles import Progress, log, tileGrid
 
 gdal.UseExceptions()
 LAYER = '/science/LSAR/GUNW/grids/frequencyA/unwrappedInterferogram'
@@ -189,6 +189,8 @@ def main():
     ap.add_argument('--nProc', type=int, default=16, help='concurrent jobs [16]')
     ap.add_argument('--tiles', nargs='+', default=None, help='only these tiles')
     ap.add_argument('--extractOnly', action='store_true', help='stop after stage 1')
+    ap.add_argument('--progressMinutes', type=float, default=5.,
+                    help='redraw quicklooks/progress.png at most this often [5]')
     ap.add_argument('--geomosaic', default='geomosaic', help='geomosaic executable')
     args = ap.parse_args()
 
@@ -249,13 +251,28 @@ def main():
         jobs.append((name, g, files, f'{args.work}/jobs/{name}',
                      f'{args.work}/tiles/coherence/{name}.tif', args.geomosaic, crs))
     log(f'stage 2: {len(jobs)} tile(s) to mosaic, {args.nProc} processes', summary)
+    # the same live picture the backscatter run draws, but 0..1 linear with NaN no data
+    g0 = jobs[0][1] if jobs else {}
+    projCRS = (open(os.path.abspath(f'{args.tileRun}/{g0["wkt"]}')).read() if g0.get('wkt')
+               else (f'EPSG:{g0["epsg"]}' if g0.get('epsg') else None))
+    progress = Progress(args.work, feats, [(j[0], 'coherence', j[0]) for j in jobs],
+                        {j[0]: j[1] for j in jobs}, 'coherence', dbMin=0., dbMax=1.,
+                        projCRS=projCRS, scale=1., nodata=float('nan'))
+    lastDraw = time.time()
     failed = 0
     with concurrent.futures.ThreadPoolExecutor(args.nProc) as pool:
         futures = {pool.submit(mosaicTile, j): j[0] for j in jobs}
         for k, fut in enumerate(concurrent.futures.as_completed(futures), 1):
             name, rc, sec, note = fut.result()
             failed += 1 if rc else 0
+            progress.count(rc == 0, name)
+            if rc == 0:
+                progress.addJob(name, 'coherence', f'{args.work}/tiles/coherence/{name}.tif')
             log(f'[{k}/{len(jobs)}, {failed} failed] {name}: {sec / 60:.1f} min {note}', summary)
+            if time.time() - lastDraw > args.progressMinutes * 60:
+                progress.draw()
+                lastDraw = time.time()
+    progress.draw()
 
     tifs = sorted(glob.glob(f'{args.work}/tiles/coherence/*.tif'))
     if tifs:
