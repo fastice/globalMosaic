@@ -34,6 +34,11 @@ DIRECTION=${DIRECTION:-A}         # A, D or both; ascending, as the Google Earth
 # so reaches geomosaic as -wkt: that needs the GP_GENERIC SRS support (installGeomosaic builds
 # it). EPSG:6933 (EASE-Grid 2.0 Global, cylindrical equal-area) is also equal-area and goes in
 # as -epsg, which every geomosaic understands -- no rebuild.
+# A granule with no H channel contributes its V channel instead of being dropped, as the
+# Google Earth product does ("H, V fallback" in its summary). This is not a detail: 5 MHz is
+# almost entirely V-only -- 2,472 ascending 5 MHz granules without it against 20,771 with --
+# and 5 MHz is the mode that covers the Sahara and the sea ice. Set to 0 for H only.
+ALLOWV=${ALLOWV:-1}
 CRS=${CRS:-}
 # Granules from other cycles, used ONLY where the main catalogue leaves a tile uncovered --
 # the same mechanism the Google Earth product used (globalGCOVTiles --fillCatalogues). One
@@ -55,6 +60,7 @@ for H in $HEMIS; do
             [ "$H" = global ] && [ -n "$CRS" ] && crsArg=(--crs "$CRS")
             fillArg=()
             [ -n "$FILLCATS" ] && fillArg=(--fillCatalogues $FILLCATS)
+            [ "$ALLOWV" = 1 ] && fillArg+=(--allowV)
             easeTiles --catalogue "$CAT" --hemisphere "$H" --tileKm "$TILEKM" \
                       --direction "$DIRECTION" "${crsArg[@]}" "${fillArg[@]}" --out "$T"
         fi
