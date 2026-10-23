@@ -53,7 +53,9 @@ Outputs (--out DIR)
   --psResM spacing on the tile's projected bounds.
 '''
 import argparse
+import csv
 import functools
+import glob
 import json
 import math
 import os
@@ -63,7 +65,7 @@ import pyproj
 from rasterio import features
 from rasterio.transform import from_origin
 from shapely.geometry import box, mapping, shape
-from shapely.ops import transform
+from shapely.ops import transform, unary_union
 
 from .globalGCOVTiles import greedyCover, loadGranules, rasterTarget, writeTile
 
@@ -240,6 +242,14 @@ def main():
     ap.add_argument('--cellM', type=float, default=2000., help='selection raster cell, m [2000]')
     ap.add_argument('--minNewFrac', type=float, default=0.001,
                     help='stop adding granules below this new-cell fraction [0.001]')
+    ap.add_argument('--keepFrom', default=None,
+                    help='an earlier tiling directory: every tile keeps exactly the granules it '
+                         'already had and only gains more, so re-mosaicking redoes just the '
+                         'tiles that changed')
+    ap.add_argument('--fillGaps', default=None,
+                    help='a gaps GeoJSON in LAT/LON (mosaicGaps writes one): with --keepFrom, '
+                         'tiles gain granules only over those areas. Lat/lon so that only the '
+                         'forward transform is needed -- Wagner VII has no inverse in PROJ')
     ap.add_argument('--fillCatalogues', nargs='+', default=[],
                     help='catalogues of other cycles, used in the order given, only where the '
                          'main catalogue leaves a tile uncovered (as globalGCOVTiles)')
@@ -291,6 +301,34 @@ def main():
         print(f'{len(cands)} candidate granules, global', flush=True)
 
     cands, projBounds = projectCandidates(crs, cands)
+    byName = {g['name']: g for g in cands}
+
+    # --keepFrom: the granules each tile already had, forced into its new selection
+    keep = {}
+    if args.keepFrom:
+        for path in glob.glob(f'{args.keepFrom}/tiles/*.csv'):
+            name = os.path.basename(path)[:-4]
+            keep[name] = [r['name'] for r in csv.DictReader(open(path))]
+        print(f'--keepFrom: {len(keep)} existing tile(s)', flush=True)
+
+    # --fillGaps: only these areas are open for new granules
+    gapGeom = None
+    if args.fillGaps:
+        fwd = pyproj.Transformer.from_crs(4326, crs, always_xy=True).transform
+        parts = []
+        for f in json.load(open(args.fillGaps))['features']:
+            try:
+                g = transform(fwd, shape(f['geometry'])).buffer(0)
+            except Exception:
+                continue
+            if not g.is_empty:
+                parts.append(g)
+        if not parts:
+            raise SystemExit(f'easeTiles: no usable polygons in {args.fillGaps}')
+        gapGeom = unary_union(parts)
+        print(f'--fillGaps: {len(parts)} gap polygon(s), {gapGeom.area / 1e6:,.0f} km2',
+              flush=True)
+
     feats, used, nTiles = [], set(), 0
     if isGlobal:
         ex = globalExtent(crs)
@@ -301,8 +339,10 @@ def main():
     print(f'{len(boxes)} candidate tiles ({args.tileKm:g} km)' +
           ('' if isGlobal else f', out to {args.extentKm:g} km'), flush=True)
     for k, (name, b) in enumerate(boxes, 1):
+        forced = [byName[n] for n in keep.get(name, []) if n in byName]
         picks, cover, nAvail = selectForBox(crs, b, cands, args.marginKm, args.cellM,
-                                            args.minNewFrac, bounds=projBounds)
+                                            args.minNewFrac, forced=forced, target=gapGeom,
+                                            bounds=projBounds)
         if not picks:
             continue
         nTiles += 1

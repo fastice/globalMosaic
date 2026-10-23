@@ -21,6 +21,13 @@ A footprint overstates: it is where the frame was acquired, not where it holds v
 a partly unfocused frame shows up as a gap that nothing can fill. Treat the gap area as an
 upper bound unless the tiler was given --validFootprints.
 
+Related: gapReport does the same job for the lat/lon product, measuring no-data against a
+LAND mask and writing its polygons in each tile's own CRS for globalGCOVTiles --fillGaps.
+This one measures against the granule footprints instead and writes lat/lon, which is what
+easeTiles --fillGaps takes -- lat/lon because it only needs the forward transform, and
+Wagner VII has no inverse in PROJ. Use gapReport for the lat/lon tiling, this for a
+projected one.
+
 Outputs (--out PREFIX)
   PREFIX.txt       the summary printed to the terminal
   PREFIX.geojson   one polygon per gap, in lat/lon, with area and tile name
