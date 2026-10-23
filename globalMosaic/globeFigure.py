@@ -61,9 +61,11 @@ def readRaster(src, width):
     # Translate, not Warp: the CRS is unchanged, and Warp builds a coordinate transformation
     # even for a plain resize -- which fails on Wagner VII, whose inverse PROJ does not have
     # ("Inverse operation for wag7 is not available").
+    nd = ds.GetRasterBand(1).GetNoDataValue()
     out = gdal.Translate('', ds, format='MEM', resampleAlg='average',
                          width=width, height=max(int(round(ds.RasterYSize * scale)), 1),
-                         noData=NODATA)
+                         noData=NODATA if nd is None else nd)
+    isInt = gdal.GetDataTypeName(out.GetRasterBand(1).DataType).startswith('Int')
     a = out.ReadAsArray().astype('f4')
     if a.ndim == 3:
         a = a[0]
@@ -72,7 +74,7 @@ def readRaster(src, width):
     ny, nx = a.shape
     ext = [gt[0], gt[0] + nx * gt[1], gt[3] + ny * gt[5], gt[3]]
     del out, ds
-    return np.where(a == NODATA, np.nan, a), ext, crs
+    return np.where(a == NODATA, np.nan, a), ext, crs, isInt
 
 
 def main():
@@ -81,8 +83,14 @@ def main():
     ap.add_argument('raster', help='mosaic VRT, GeoTIFF, or a directory of tiles')
     ap.add_argument('--out', default='globe.png', help='output image [globe.png]')
     ap.add_argument('--width', type=int, default=3000, help='output width, pixels [3000]')
-    ap.add_argument('--dbMin', type=float, default=-24., help='black at this dB [-24]')
-    ap.add_argument('--dbMax', type=float, default=-1., help='white at this dB [-1]')
+    ap.add_argument('--dbMin', '--vMin', dest='vMin', type=float, default=None,
+                    help='black at this value [-24 for dB backscatter, 0 for coherence]')
+    ap.add_argument('--dbMax', '--vMax', dest='vMax', type=float, default=None,
+                    help='white at this value [-1 for dB backscatter, 1 for coherence]')
+    ap.add_argument('--scale', type=float, default=None,
+                    help='divide the stored values by this before stretching; the default '
+                         'follows the data type -- 100 for the int16 dB x 100 backscatter '
+                         'tiles, 1 for Float32 linear tiles such as coherence')
     ap.add_argument('--ocean', default='#1b4f72', help="ocean fill colour ['#1b4f72']")
     ap.add_argument('--edge', default='#0d2b3e', help='map outline colour')
     ap.add_argument('--background', default='white', help='colour outside the map [white]')
@@ -100,7 +108,11 @@ def main():
     matplotlib.use('Agg')
     import matplotlib.pyplot as plt
 
-    grey, ext, rasterCrs = readRaster(args.raster, args.width)
+    grey, ext, rasterCrs, isInt = readRaster(args.raster, args.width)
+    # int16 tiles hold dB x 100; Float32 tiles hold the quantity itself (coherence 0..1)
+    scale = args.scale if args.scale is not None else (100. if isInt else 1.)
+    vMin = args.vMin if args.vMin is not None else (-24. if isInt else 0.)
+    vMax = args.vMax if args.vMax is not None else (-1. if isInt else 1.)
     crs = args.crs
     if crs is None:
         crs = rasterCrs.ExportToWkt()
@@ -117,7 +129,7 @@ def main():
     if args.coast or args.graticule:
         overlays(ax, crs, args)
     with np.errstate(invalid='ignore'):
-        g = np.clip((grey / 100. - args.dbMin) / (args.dbMax - args.dbMin), 0., 1.)
+        g = np.clip((grey / scale - vMin) / (vMax - vMin), 0., 1.)
     rgba = np.dstack([g, g, g, np.where(np.isfinite(g), 1., 0.)])
     im = ax.imshow(rgba, extent=ext, interpolation='nearest', zorder=3)
     # Clip to the map: tiles built before the Wagner VII inverse rejected |lon| > 180 carry a
