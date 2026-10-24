@@ -2,6 +2,9 @@
 # Coherence map for ONE cycle, on the same Wagner VII grid as the backscatter product.
 #
 #   bash test/runCycleCoherence.sh 024
+#   for c in 024 025 026 027 028 029 030 031 032; do
+#       bash test/runCycleCoherence.sh $c
+#   done
 #   RES=2000 NPROC=16 bash test/runCycleCoherence.sh 025
 #   CRS=EPSG:6933 bash test/runCycleCoherence.sh 026        # no rebuilt geomosaic needed
 #
@@ -29,6 +32,8 @@ DIRECTION=${DIRECTION:-A}
 # The catalogue directory is named either way round in practice -- cycle30gunw beside
 # cycle024gunw -- so accept both rather than silently re-searching ASF for one that is there.
 SHORT=$((10#$CYCLE))
+SCAN=${SCAN:-1}                  # 0 to skip the valid-footprint scan (and keep the banding)
+SCANTHREADS=${SCANTHREADS:-24}
 CAT=${CAT:-}
 if [ -z "$CAT" ]; then
     for d in "cycle${CYCLE}gunw" "cycle${SHORT}gunw"; do
@@ -49,12 +54,26 @@ fi
 echo "=== $(date) catalogue: $CAT ($(python3 -c "
 import json;print(len(json.load(open('$CAT'))['features']))") granules) ==="
 
+# Valid-data footprints. Without them the tiler selects on the ACQUISITION footprint, which
+# overstates: a frame's data can stop ~100 km short of its footprint, the cover counts that
+# ground as covered, drops the granule that really holds it, and leaves a band along the frame
+# boundary -- at the same latitudes on every track. Measured on
+# NISAR_L2_PR_GUNW_024_071_A_168: footprint to lat -17.75, data only to -18.64.
+VF=$(dirname "$CAT")/validFootprints.geojson
+if [ "$SCAN" = 1 ] && [ ! -f "$VF" ]; then
+    echo "=== $(date) scanning valid-data footprints (the slow step, ~1 h) ==="
+    scanMasks "$CAT" --all --direction "$DIRECTION" --threads "$SCANTHREADS" --out "$VF" \
+        || echo "  WARNING: the scan failed; tiling will fall back to acquisition footprints"
+fi
+vfArg=()
+[ -f "$VF" ] && vfArg=(--validFootprints "$VF")
+
 if [ -f "$T/tiles.geojson" ]; then
     echo "=== $(date) tiling exists, skipping ==="
 else
     echo "=== $(date) tiling cycle $CYCLE ($TILEKM km, $CRS) ==="
     easeTiles --catalogue "$CAT" --hemisphere global --crs "$CRS" --tileKm "$TILEKM" \
-        --direction "$DIRECTION" --allowV --out "$T" || exit 1
+        --direction "$DIRECTION" --allowV "${vfArg[@]}" --out "$T" || exit 1
 fi
 
 echo "=== $(date) coherence mosaic at ${RES} m, $NPROC jobs ==="
