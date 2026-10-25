@@ -65,6 +65,7 @@ import pyproj
 from rasterio import features
 from rasterio.transform import from_origin
 from shapely.geometry import box, mapping, shape
+from shapely.affinity import translate
 from shapely.ops import transform, unary_union
 
 from .globalGCOVTiles import greedyCover, loadGranules, rasterTarget, writeTile
@@ -156,6 +157,31 @@ def globalBoxes(tileM, extent):
             yield f'X{i:+03d}Y{j:+03d}', box(i * tileM, j * tileM, (i + 1) * tileM, (j + 1) * tileM)
 
 
+def datelinePieces(geom):
+    """
+    A footprint split at the antimeridian, each piece inside -180..180.
+
+    ASF writes a frame that crosses 180 with longitudes running past it (177.8 .. 180.57).
+    Projecting that straight into a global CRS wraps 180.57 to -179.43, and the polygon then
+    spans the WHOLE MAP -- 33,128 km of a 34,024 km map, as a band at its own latitude. The
+    cover then believes every tile at that latitude is already covered, drops the granules
+    that really hold the data, and leaves a band of no data right across the map. That is the
+    banding seen in both the backscatter and the coherence products; the lat/lon tiler never
+    had it because globalGCOVTiles selects on loadGranules' unwrapped `geom`, while this one
+    projects `raw`.
+    """
+    w, s, e, n = geom.bounds
+    if w >= -180. and e <= 180.:
+        return [geom]
+    world = box(-180., -90., 180., 90.)
+    out = []
+    for shift in (0., -360., 360.):
+        part = translate(geom, xoff=shift).intersection(world)
+        if not part.is_empty and part.area > 0:
+            out.append(part)
+    return out or [geom]
+
+
 def projectCandidates(crs, cands):
     ''' Project every footprint ONCE, and keep its projected bounds for a cheap per-tile
     reject. selectForBox used to reproject all of them for every box: O(boxes x granules)
@@ -165,7 +191,8 @@ def projectCandidates(crs, cands):
     out = []
     for g in cands:
         try:
-            geom = transform(fwd, shape(g['raw'])).buffer(0)
+            parts = [transform(fwd, p).buffer(0) for p in datelinePieces(shape(g['raw']))]
+            geom = unary_union([p for p in parts if not p.is_empty])
         except Exception:
             continue
         if geom.is_empty:
