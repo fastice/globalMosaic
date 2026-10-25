@@ -87,8 +87,12 @@ gunwCoherence "$T" --work "$W" --psResM "$RES" --nProc "$NPROC" \
 echo "=== $(date) figure ==="
 # 0..1, never dB: coherence is a ratio. The same stretch for every cycle, so the series is
 # comparable by eye.
-globeFigure "$W/tiles/coherence" --out "$ROOT/coherence_cycle$CYCLE.png" \
+# ascending keeps the plain name it has always had; anything else is tagged, so the two
+# cannot collide even if they are pointed at one ROOT
+SFX=""
+[ "$DIRECTION" != A ] && SFX="_$DIRECTION"
+globeFigure "$W/tiles/coherence" --out "$ROOT/coherence_cycle$CYCLE$SFX.png" \
     --width "${QLPX:-6000}" --coast --dbMin 0 --dbMax 1 \
-    --title "NISAR GUNW coherence, cycle $CYCLE"
+    --title "NISAR GUNW coherence, cycle $CYCLE, direction $DIRECTION"
 
-echo "=== $(date) done: $ROOT/coherence_cycle$CYCLE.png ==="
+echo "=== $(date) done: $ROOT/coherence_cycle$CYCLE$SFX.png ==="

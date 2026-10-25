@@ -17,6 +17,14 @@ ROOT=${ROOT:-/scratch/ianj/mosaics/coherence}
 CYCLES=${CYCLES:-"024 025 026 027 028 029 030 031 032"}
 export SCAN=${SCAN:-0}
 export NPROC=${NPROC:-96}
+export DIRECTION=${DIRECTION:-A}
+export ROOT
+# Descending must not land on top of ascending: they share the catalogues but nothing else.
+if [ "$DIRECTION" != A ] && [ "$ROOT" = /scratch/ianj/mosaics/coherence ]; then
+    echo "DIRECTION=$DIRECTION with the default ROOT would overwrite the ascending product." >&2
+    echo "Give it its own, e.g. ROOT=/scratch/ianj/mosaics/coherence$DIRECTION" >&2
+    exit 2
+fi
 
 cd "$(dirname "$0")/.." || exit 1
 
