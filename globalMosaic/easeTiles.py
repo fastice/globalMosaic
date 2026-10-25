@@ -203,8 +203,18 @@ def projectCandidates(crs, cands):
 
 
 def selectForBox(epsg, tileBox, cands, marginKm, cellM, minNewFrac, forced=(), target=None,
-                 bounds=None):
-    ''' Greedy cover of one projected tile, rasterised in metres on its own grid. '''
+                 bounds=None, allGranules=False):
+    '''
+    Granules for one projected tile, rasterised in metres on its own grid.
+
+    By default a greedy cover: the fewest granules that cover the tile, preferring the better
+    bandwidth, which is what a backscatter mosaic wants -- one good observation per place.
+
+    With allGranules, every granule that touches the tile is kept instead. geomosaic averages
+    overlapping inputs, so the product becomes the MEAN over all available pairs rather than
+    the value of whichever one the cover happened to pick. That is what a coherence mosaic
+    wants, and it costs proportionally more reads.
+    '''
     pad = marginKm * 1000.
     x0, y0, x1, y1 = tileBox.bounds
     padded = box(x0 - pad, y0 - pad, x1 + pad, y1 + pad)
@@ -233,6 +243,14 @@ def selectForBox(epsg, tileBox, cands, marginKm, cellM, minNewFrac, forced=(), t
             masks.append((g, m))
     if not masks:
         return [], 0., 0
+    if allGranules:
+        # tier order only decides the order they are written in; geomosaic averages them all
+        masks.sort(key=lambda gm: (gm[0].get('fill', 0), -gm[0]['bw'], gm[0]['mixed']))
+        union = np.zeros((ny, nx), bool)
+        for _, m in masks:
+            union |= m
+        return ([(g, int(m.sum())) for g, m in masks],
+                float(union.sum()) / (nx * ny), len(masks))
     # greedyCover -> (picks, coverage, coveredCells, totalCells)
     picks, cover, _, _ = greedyCover(masks, (ny, nx), minNewFrac, forced,
                                      rasterTarget(target, (ny, nx), tr))
@@ -291,6 +309,11 @@ def main():
     ap.add_argument('--fillCatalogues', nargs='+', default=[],
                     help='catalogues of other cycles, used in the order given, only where the '
                          'main catalogue leaves a tile uncovered (as globalGCOVTiles)')
+    ap.add_argument('--allGranules', action='store_true',
+                    help='keep EVERY granule that touches a tile instead of the fewest that '
+                         'cover it. geomosaic averages overlapping inputs, so the tile becomes '
+                         'the mean over all available pairs -- what a coherence mosaic wants. '
+                         'A backscatter mosaic normally wants the default minimal cover.')
     ap.add_argument('--direction', choices=['A', 'D', 'both'], default='both',
                     help='orbit direction from the file name [both]')
     ap.add_argument('--allowV', action='store_true', help='also use V-only granules')
@@ -397,7 +420,7 @@ def main():
         forced = [byName[n] for n in keep.get(name, []) if n in byName]
         picks, cover, nAvail = selectForBox(crs, b, cands, args.marginKm, args.cellM,
                                             args.minNewFrac, forced=forced, target=gapGeom,
-                                            bounds=projBounds)
+                                            bounds=projBounds, allGranules=args.allGranules)
         if not picks:
             continue
         nTiles += 1

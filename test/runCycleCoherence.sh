@@ -72,8 +72,12 @@ if [ -f "$T/tiles.geojson" ]; then
     echo "=== $(date) tiling exists, skipping ==="
 else
     echo "=== $(date) tiling cycle $CYCLE ($TILEKM km, $CRS) ==="
+    # --allGranules: every pair over a tile, not the fewest that cover it. geomosaic averages
+    # overlapping inputs, so each cell is the MEAN coherence of every available pair rather
+    # than whichever one a minimal cover picked. Costs more reads; the backscatter product
+    # keeps the minimal cover.
     easeTiles --catalogue "$CAT" --hemisphere global --crs "$CRS" --tileKm "$TILEKM" \
-        --direction "$DIRECTION" --allowV "${vfArg[@]}" --out "$T" || exit 1
+        --direction "$DIRECTION" --allowV --allGranules "${vfArg[@]}" --out "$T" || exit 1
 fi
 
 echo "=== $(date) coherence mosaic at ${RES} m, $NPROC jobs ==="
