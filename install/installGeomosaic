@@ -23,6 +23,9 @@
 #       --branch NAME    force this branch for EVERY repo (default: the table below)
 #       --ssh            clone over ssh instead of https
 #       --jobs N         parallel make jobs           [nproc]
+#       --targets LIST   what to build ['geomosaic'; 'all' = every mosaicSource binary,
+#                        which is what you want when switching GDAL: a mixed set, some
+#                        against system GDAL and some against conda, is the confusing case]
 #       --hdf5-include D HDF5 serial headers, if not in /usr/include (no-root route)
 #       --hdf5-lib SPEC  HDF5 library to link, e.g. an absolute .so path
 #       --gdal-libs SPEC GDAL link flags [from gdal-config --libs, plus -lproj]
@@ -42,6 +45,7 @@ BINDIR="${GEOMOSAIC_BINDIR:-$HOME/bin/$(uname -m)}"
 FORCE_BRANCH=""
 PROTO=https
 JOBS="$(nproc 2>/dev/null || echo 4)"
+TARGETS=geomosaic        # 'all' builds every mosaicSource binary against the same GDAL
 DOPULL=1
 FORCE=0
 HDF5INC=""
@@ -84,6 +88,7 @@ while [ $# -gt 0 ]; do
         --branch)     FORCE_BRANCH="$2"; shift 2 ;;
         --ssh)        PROTO=ssh; shift ;;
         --jobs)       JOBS="$2"; shift 2 ;;
+        --targets)    TARGETS="$2"; shift 2 ;;
         --hdf5-include) HDF5INC="$2"; shift 2 ;;
         --hdf5-lib)   HDF5LIB="$2"; shift 2 ;;
         --gdal-libs)  GDALLIBS="$2"; shift 2 ;;
@@ -310,13 +315,13 @@ fi
 # ROOTDIR is only used to derive defaults the other two variables override, but the
 # Makefile expects it, so pass all three explicitly.
 mkdir -p "$BINDIR"
-note "building geomosaic (-j$JOBS) into $BINDIR"
+note "building $TARGETS (-j$JOBS) into $BINDIR"
 makeArgs=()
 [ -n "$HDF5INC" ] && makeArgs+=("HDF5INCLUDE=$HDF5INC")
 [ -n "$HDF5LIB" ] && makeArgs+=("HDF5LIB=$HDF5LIB")
 [ -n "$GDALLIBS" ] && makeArgs+=("GDAL=$GDALLIBS")
 buildLog="$(mktemp)"
-make -C "$GITROOT/mosaicSource" -j"$JOBS" geomosaic \
+make -C "$GITROOT/mosaicSource" -j"$JOBS" $TARGETS \
      ROOTDIR="$(dirname "$GITROOT")" \
      PROGDIR="$GITROOT" \
      BINDIR="$BINDIR" "${makeArgs[@]}" 2>&1 | tee "$buildLog"
@@ -334,6 +339,14 @@ fi
 rm -f "$buildLog"
 
 [ -x "$BINDIR/geomosaic" ] || die "build finished but $BINDIR/geomosaic is not there"
+if [ "$TARGETS" != geomosaic ]; then
+    note "binaries now in $BINDIR:"
+    for t in mosaic3d siminsar rparams azparams coarsereg tiepoints lltora getlocc \
+             geomosaic smoothradius; do
+        [ -x "$BINDIR/$t" ] && printf '    %-14s %s\n' "$t" \
+            "$(ldd "$BINDIR/$t" 2>/dev/null | grep -o '/[^ ]*libgdal[^ ]*' | head -1)"
+    done
+fi
 
 # ---------------------------------------------------------------- capability check
 # The real guarantee. A branch name can be wrong, a merge can drop a feature, an old
