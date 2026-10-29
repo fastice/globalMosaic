@@ -1,2 +1,14 @@
 *.egg-info/
 runs/
+
+# scratch left by benchmarks and one-off checks
+bench/*.conda
+bench/*.sys
+bench/*.o
+# tilings written next to a catalogue by a search (the catalogue itself is kept)
+cycle*gunw/tiles/
+cycle*gunw/tiles.geojson
+cycle*gunw/summary.txt
+cycle*gcov/tiles/
+cycle*gcov/tiles.geojson
+cycle*gcov/summary.txt
