@@ -101,6 +101,14 @@ Wagner VII and Equal Earth have no EPSG code and reach geomosaic as `-wkt`; Wagn
 has no PROJ inverse, which only the current `mosaicSource` handles. If `installGeomosaic` has
 not been run on this machine, prefer `EPSG:6933` or run it first.
 
+Anything else PROJ can parse also works — UTM (`EPSG:32610`), polar stereographic
+(`EPSG:3031`, `3413`, `3995`), Albers (`3338`, `5070`), geographic (`4326`, whose grid is in
+DEGREES), or an ESRI code with its prefix (`ESRI:102001`; bare `-epsg 102001` fails). For a
+backscatter or coherence mosaic a non-conformal CRS is fine — geomosaic says "usable for
+positions only", which only restricts velocity work in `mosaic3d`. Two things are refused
+outright: a non-WGS84 ellipsoid (`EPSG:3411` on Hughes 1980), and a false easting/northing on
+a polar stereographic. See the README's Projections section.
+
 ---
 
 ## Recipes

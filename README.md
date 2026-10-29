@@ -102,6 +102,44 @@ and coherence of the same cycle.
 
 ---
 
+## Projections
+
+The output grid is whatever `geomosaic` can be given, so any CRS PROJ can parse works —
+EPSG code, ESRI code or proj string. All of these were run against the binary:
+
+| kind | example | how it is handled |
+|---|---|---|
+| geographic | `EPSG:4326` | grid units are DEGREES, not metres |
+| polar stereographic | `EPSG:3031`, `3413`, `3995`, custom `+proj=stere` | the legacy exact path; conformal |
+| UTM | `EPSG:32610`, `32633`, `32760` | through PROJ; conformal |
+| equal area with a code | `EPSG:6933` (EASE Global), `6931`/`6932` (EASE polar), `3338`, `5070` (Albers) | positions only — see below |
+| equal area without a code | Equal Earth, `ESRI:102001`, any proj string | same, passed with `-wkt` instead of `-epsg` |
+| Wagner VII | `ESRI:54076` | special: PROJ has no inverse, so `grimpProj.c` carries its own |
+
+**"Positions only"** is what `geomosaic` prints for a non-conformal CRS, and for a
+backscatter or coherence mosaic it is simply a note: a scalar is resampled, so an equal-area
+or any other projected grid is fine. It matters for **velocity**: `mosaic3d` decomposes into
+vx/vy with one grid angle and one isotropic scale, which only holds on a conformal grid, so
+it refuses anything but polar stereographic or UTM.
+
+Two hard limits, both of which error out rather than producing a wrong answer:
+
+- **WGS84 only.** A CRS on another ellipsoid is refused — `EPSG:3411` (Hughes 1980,
+  semi-major 6,378,273) fails with the axis quoted. GRS80 passes, being WGS84's axis to
+  5e-9.
+- **No false easting or northing on a polar stereographic**; the exact legacy path cannot
+  express one.
+
+In this package, `easeTiles --crs` takes any of these for `--hemisphere global`: a CRS with
+an EPSG code reaches `geomosaic` as `-epsg`, one without (Equal Earth, Wagner VII) is written
+to `proj.wkt` and passed as `-wkt`. The `-wkt` path and Wagner VII need a `geomosaic` built
+from current `mosaicSource`; `-epsg` works with any build.
+
+An ESRI code must carry its prefix (`ESRI:54076`) — `-epsg 102001` fails, because that is
+not an EPSG code.
+
+---
+
 ## Every command
 
 | command | what it does |
