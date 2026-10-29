@@ -126,15 +126,25 @@ findDir() {  # findDir <header> <candidate dirs...>
     return 1
 }
 
-GDALINC="$(findDir gdal.h /usr/include/gdal /usr/include /usr/local/include \
-                   ${CONDA_PREFIX:+$CONDA_PREFIX/include} ${GDAL_INCLUDE:-})" || {
+# Order matters, and it used to be wrong. An explicit GDAL_INCLUDE has to win, and an ACTIVE
+# conda environment has to beat the system: the binaries must link the same GDAL the Python
+# tools import and the same one a GDAL plugin is installed into, or a driver added to conda
+# is invisible to geomosaic. Searching /usr/include/gdal first meant conda could never be
+# selected while system headers existed, and GDAL_INCLUDE, being last, never overrode
+# anything.
+GDALINC="$(findDir gdal.h ${GDAL_INCLUDE:-} ${CONDA_PREFIX:+$CONDA_PREFIX/include} \
+                   /usr/include/gdal /usr/include /usr/local/include)" || {
     echo "installGeomosaic: cannot find gdal.h" >&2
-    echo "  looked in /usr/include/gdal, /usr/include, /usr/local/include${CONDA_PREFIX:+, \$CONDA_PREFIX/include}" >&2
+    echo "  looked in${GDAL_INCLUDE:+ \$GDAL_INCLUDE,}${CONDA_PREFIX:+ \$CONDA_PREFIX/include,} /usr/include/gdal, /usr/include, /usr/local/include" >&2
     echo "  install GDAL development headers (libgdal-dev / gdal-devel), or set GDAL_INCLUDE." >&2
     exit 1
 }
-[ -z "$HDF5INC" ] && HDF5INC="$(findDir hdf5.h /usr/include/hdf5/serial /usr/include \
-                   /usr/local/include ${CONDA_PREFIX:+$CONDA_PREFIX/include})" || true
+# Everything else follows the prefix the headers came from, so a conda build cannot end up
+# with system libraries or the other way round.
+GDALPREFIX="$(dirname "$GDALINC")"
+[ "$(basename "$GDALINC")" = gdal ] && GDALPREFIX="$(dirname "$(dirname "$GDALINC")")"
+[ -z "$HDF5INC" ] && HDF5INC="$(findDir hdf5.h "$GDALPREFIX/include" \
+                   /usr/include/hdf5/serial /usr/include /usr/local/include)" || true
 if [ -z "$HDF5INC" ]; then
     echo "installGeomosaic: cannot find hdf5.h" >&2
     echo "  geomosaic reads float16 GCOV bands through libhdf5 directly, so this is required." >&2
@@ -153,11 +163,17 @@ if [ -z "$HDF5LIB" ]; then
     # Debian/Ubuntu ship only libhdf5_serial.so (serial/mpi split); everyone else ships
     # libhdf5.so. Probe each directory separately -- a single `ls` over several globs
     # returns non-zero if ANY of them misses, which silently picked the wrong name.
+    # Look in the CHOSEN prefix only: conda ships libhdf5.so and Debian libhdf5_serial.so, and
+    # scanning both meant a conda build picked up the system's -lhdf5_serial.
     HDF5LIB="-lhdf5"
-    for d in /usr/lib/$(uname -m)-linux-gnu /usr/lib64 /usr/lib /usr/local/lib \
-             ${CONDA_PREFIX:+$CONDA_PREFIX/lib}; do
+    for d in "$GDALPREFIX/lib" "$GDALPREFIX/lib64"; do
         if ls "$d"/libhdf5_serial.so* >/dev/null 2>&1; then HDF5LIB="-lhdf5_serial"; break; fi
     done
+    if [ "$GDALPREFIX" = /usr ]; then
+        for d in /usr/lib/$(uname -m)-linux-gnu /usr/lib64 /usr/lib; do
+            if ls "$d"/libhdf5_serial.so* >/dev/null 2>&1; then HDF5LIB="-lhdf5_serial"; break; fi
+        done
+    fi
 fi
 [ -f /usr/include/proj.h ] || [ -f /usr/local/include/proj.h ] || \
     [ -n "${CONDA_PREFIX:-}" -a -f "${CONDA_PREFIX:-/nonexistent}/include/proj.h" ] || \
@@ -174,12 +190,18 @@ if [ -z "$GDALLIBS" ]; then
     gc=""
     # Prefer the gdal-config belonging to the SAME prefix as the headers we found, so a conda
     # gdal-config on PATH cannot describe a system GDAL, or vice versa.
-    for cand in "$(dirname "$GDALINC")/bin/gdal-config" "$(dirname "$(dirname "$GDALINC")")/bin/gdal-config"; do
+    for cand in "$GDALPREFIX/bin/gdal-config" "$(dirname "$GDALINC")/bin/gdal-config"; do
         [ -x "$cand" ] && { gc="$cand"; break; }
     done
     [ -z "$gc" ] && gc="$(command -v gdal-config 2>/dev/null || true)"
     if [ -n "$gc" ]; then
         GDALLIBS="$($gc --libs) -lproj"
+        # gdal-config gives -L but no rpath, so a binary built against a conda GDAL finds
+        # nothing at run time ("libgdal.so.36 => not found") unless LD_LIBRARY_PATH happens to
+        # be set. Burn the prefix in instead; harmless for /usr, which is already searched.
+        if [ "$GDALPREFIX" != /usr ]; then
+            GDALLIBS="$GDALLIBS -Wl,-rpath,$GDALPREFIX/lib"
+        fi
     else
         GDALLIBS="-lgdal -lproj"
         echo "installGeomosaic: WARNING - no gdal-config found; linking with plain -lgdal -lproj" >&2
@@ -188,6 +210,7 @@ fi
 
 # This is the invisible dependency made explicit. Prepend, never clobber.
 export C_INCLUDE_PATH="$GDALINC${C_INCLUDE_PATH:+:$C_INCLUDE_PATH}"
+note "gdal prefix  : $GDALPREFIX"
 note "gdal libs    : $GDALLIBS"
 note "gdal headers : $GDALINC  (exported as C_INCLUDE_PATH)"
 note "hdf5 headers : $HDF5INC"
