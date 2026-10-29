@@ -175,8 +175,33 @@ not an EPSG code.
 - **Wagner VII has no inverse in PROJ.** `geomosaic` carries its own (`grimpProj.c`), and the
   Python side has a matching `wagner7Inverse`. `gdal.Warp` into such a CRS fails; use
   `gdal.Translate` for a plain resize.
-- **`CPL_VSIL_CURL_CHUNK_SIZE` cuts both ways**: 4 MB is best for geomosaic's large sequential
-  reads, and 44x worse than the default for the scattered small reads that open an HDF5.
+- **`CPL_VSIL_CURL_CHUNK_SIZE` and the vsicurl CACHE decide how much you re-download.** A GCOV
+  band is gzipped in 512x512 chunks (0.26 MB compressed each), and geomosaic walks it in
+  strips, so a large curl chunk fetches far more than the chunk it wanted. One HHHH band is
+  1.60 GB stored; reading it for a global tile over `/vsicurl`:
+
+  | chunk | cache | transferred | time |
+  |---|---|---|---|
+  | 4 MB | 16 MB (GDAL default) | 12760 MB | 1055 s |
+  | 16 kB (GDAL default) | 16 MB | 3475 MB | 699 s |
+  | 64 kB | 256 MB | 1795 MB | 317 s |
+
+  The cache is the half that is easy to miss: one chunk ROW is 20.8 MB against a 16.4 MB
+  default cache, and a strip straddles two chunk rows, so each row is evicted before its
+  second use and downloaded twice. `runGeomosaicTiles` now defaults to 64 kB / 256 MB (per
+  process, so 32 jobs hold 8 GB) and both are overridable from the environment. A 4 MB chunk
+  remains right for one large sequential stream, which is what `benchmarkASFRead.py` measures
+  and is not how a GCOV is read.
+
+- **The NISAR GDAL plugin trades bytes for latency.** With `gdal_NISAR.so` installed,
+  `GRIMP_NISAR_DRIVER=remote` sends the big 2-D arrays through it for `/vsi` paths: the same
+  band reads in ~100 s instead of 317 s, bit-identical, because it keeps ~30 range requests in
+  flight while libhdf5 blocks on one at a time (a flat ~0.2 s each). It moves slightly MORE
+  data (1.24x the stored bytes against 1.10x), so the win is latency, not volume -- it pays
+  when bandwidth is idle and stops paying once `--nProc` jobs saturate the link, where the
+  extra bytes and ~30 sockets per job turn into a liability. Off by default; use it for one or
+  a few jobs, not a 32-way global run. It is 6-10x SLOWER on local files and never used for
+  them.
 - **Per-cycle series take one cycle only.** `--fillCatalogues` closes gaps by borrowing other
   cycles, which is right for a single best-coverage product and wrong for a time series.
 

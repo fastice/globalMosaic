@@ -171,12 +171,22 @@ def mosaicTile(job):
     t0 = time.time()
     cookies = os.path.abspath(os.path.join(os.path.dirname(jobDir), '..', 'cookies', 'cookies'))
     env = dict(os.environ, OPENBLAS_NUM_THREADS='1', OMP_NUM_THREADS='1',
-               # the VRTs resolve to /vsicurl/, so the child needs the Earthdata login,
-               # the cookie jar for its redirect, and the 4 MB chunk size the ASF benchmark
-               # settled on (bench/benchmarkASFRead.py)
+               # the VRTs resolve to /vsicurl/, so the child needs the Earthdata login and
+               # the cookie jar for its redirect.
+               #
+               # The 4 MB chunk is kept as the default here but is now overridable. On the
+               # GCOV path a 4 MB chunk proved badly wrong (see runGeomosaicTiles): it drags
+               # ~16x the compressed HDF5 chunk wanted, and a 64 kB chunk with a 256 MB
+               # vsicurl cache read the same band in 317 s against 1055 s. Coherence comes
+               # through a VRT read by -geo rather than geomosaic's own strip walk, so that
+               # result does not transfer untested -- try the same pair here and compare
+               # before changing the default.
                GDAL_HTTP_NETRC='YES', GDAL_HTTP_COOKIEFILE=cookies, GDAL_HTTP_COOKIEJAR=cookies,
                GDAL_DISABLE_READDIR_ON_OPEN='EMPTY_DIR', GDAL_HTTP_MAX_RETRY='5',
-               GDAL_HTTP_RETRY_DELAY='10', CPL_VSIL_CURL_CHUNK_SIZE='4194304')
+               GDAL_HTTP_RETRY_DELAY='10',
+               CPL_VSIL_CURL_CHUNK_SIZE=os.environ.get('CPL_VSIL_CURL_CHUNK_SIZE', '4194304'),
+               CPL_VSIL_CURL_CACHE_SIZE=os.environ.get('CPL_VSIL_CURL_CACHE_SIZE',
+                                                       '268435456'))
     with open(f'{jobDir}/log', 'w') as fp:
         rc = subprocess.run(cmd, cwd=jobDir, env=env, stdout=fp,
                             stderr=subprocess.STDOUT).returncode

@@ -222,12 +222,28 @@ def runJob(jobDir, cmdBase, products, retries=2, s3Keys=None):
                GDAL_HTTP_NETRC='YES', GDAL_HTTP_COOKIEFILE=f'{jobDir}/cookies',
                GDAL_HTTP_COOKIEJAR=f'{jobDir}/cookies', GDAL_DISABLE_READDIR_ON_OPEN='EMPTY_DIR',
                GDAL_HTTP_MAX_RETRY='5', GDAL_HTTP_RETRY_DELAY='10',
-               # 4 MB vsicurl chunks: measured 8.37 MB/s per stream against ASF vs 7.1 at
-               # GDAL's 16 kB default, the best of 1/4/16 MB (bench/benchmarkASFRead.py).
-               # GDAL_NUM_THREADS=ALL_CPUS added another 4% single-stream and is deliberately
-               # NOT set here -- with --nProc jobs in flight it would oversubscribe the box,
-               # which is also why OMP/OPENBLAS are pinned to 1 above.
-               CPL_VSIL_CURL_CHUNK_SIZE='4194304')
+               # GDAL_NUM_THREADS=ALL_CPUS added 4% single-stream and is deliberately NOT set
+               # here -- with --nProc jobs in flight it would oversubscribe the box, which is
+               # also why OMP/OPENBLAS are pinned to 1 above.
+               #
+               # 64 kB chunks and a 256 MB vsicurl cache, both overridable from the
+               # environment. These replace a 4 MB chunk that came from benchmarkASFRead.py
+               # timing one sequential stream, which is not how a GCOV is read: geomosaic
+               # walks a gzip-chunked (512x512) dataset in strips, so a 4 MB vsicurl block
+               # drags ~16x the 0.26 MB compressed chunk actually wanted. Reading one HHHH
+               # band (1.60 GB stored) for a global tile, measured against ASF:
+               #     chunk 4 MB,  cache 16 MB (default)   12760 MB   1055 s
+               #     chunk 16 kB, cache 16 MB (default)    3475 MB    699 s
+               #     chunk 16 kB, cache 64 MB              1808 MB    404 s
+               #     chunk 64 kB, cache 256 MB             1795 MB    317 s
+               # The cache matters because one chunk ROW is 79 x 0.26 = 20.8 MB and GDAL's
+               # default cache is 16.4 MB: a strip straddles two chunk rows, so each row is
+               # wanted twice and evicted in between, and gets downloaded twice. At 256 MB
+               # the transfer is 1.10x the stored bytes, near the floor. The cache is per
+               # process, so 32 jobs hold 8 GB.
+               CPL_VSIL_CURL_CHUNK_SIZE=os.environ.get('CPL_VSIL_CURL_CHUNK_SIZE', '65536'),
+               CPL_VSIL_CURL_CACHE_SIZE=os.environ.get('CPL_VSIL_CURL_CACHE_SIZE',
+                                                       '268435456'))
     t0 = time.time()
     for attempt in range(retries + 1):
         if s3Keys is not None:
