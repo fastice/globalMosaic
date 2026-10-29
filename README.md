@@ -33,6 +33,12 @@ machine urs.earthdata.nasa.gov login YOUR_USER password YOUR_PASSWORD
 ```
 
 The tools set `GDAL_HTTP_NETRC` and a cookie jar themselves; the redirect needs both.
+**Without `~/.netrc` every granule read fails and the mosaic comes out empty but valid** —
+georeferenced tiles full of no-data, which reads as missing acquisitions rather than as an
+authentication problem. `test/checkAccess.sh` checks it before a long run.
+
+Catalogue searches go through `asf_search` (no credentials needed for the search itself);
+only reading the granules needs the login.
 
 ---
 
