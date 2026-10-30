@@ -80,11 +80,25 @@ for pair in "like:$TL" "cross:$TC"; do
         || echo "  WARNING: some $lab tiles failed (see $W/$lab/summary.log); rerun to retry"
 done
 
-L=$W/like/vrt/gamma0/global.vrt
-C=$W/cross/vrt/gamma0/global.vrt
-for f in "$L" "$C"; do
-    [ -f "$f" ] || { echo "missing $f -- not building the ratio" >&2; exit 1; }
-done
+# The assembled mosaic has different names by CRS: a PROJECTED global run (Wagner VII, EASE,
+# Equal Earth) writes vrt/<product>/ease_<epsg>.vrt and deliberately NO global.vrt, because it
+# has no latitude bands; a lat/lon run writes global.vrt. Look for either, or the ratio step
+# aborts after both mosaics have already been built.
+pickVrt() {
+    local d=$1 f
+    for f in "$d"/ease_*.vrt "$d"/global.vrt; do
+        [ -f "$f" ] && { echo "$f"; return 0; }
+    done
+    return 1
+}
+L=$(pickVrt "$W/like/vrt/gamma0") || {
+    echo "no assembled like-pol VRT in $W/like/vrt/gamma0 -- not building the ratio" >&2
+    echo "    see $W/like/summary.log" >&2; exit 1; }
+C=$(pickVrt "$W/cross/vrt/gamma0") || {
+    echo "no assembled cross-pol VRT in $W/cross/vrt/gamma0 -- not building the ratio" >&2
+    echo "    see $W/cross/summary.log" >&2; exit 1; }
+echo "=== $(date) like  $L"
+echo "=== $(date) cross $C"
 
 SFX=""
 [ "$DIRECTION" != A ] && SFX="_$DIRECTION"
