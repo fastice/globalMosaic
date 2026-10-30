@@ -233,6 +233,13 @@ not an EPSG code.
   remains right for one large sequential stream, which is what `benchmarkASFRead.py` measures
   and is not how a GCOV is read.
 
+- **`GDAL_CACHEMAX` defaults to 5% of PHYSICAL RAM, per process** -- 6.2 GB on a 124 GB
+  machine, 25 GB on a 503 GB one -- and you run one process per `--nProc`, so the default is
+  an out-of-memory waiting for a big job count. Both drivers now set 256 MB, overridable:
+  enough for the ~158 MB of blocks one strip read touches, and 20 GB across 80 jobs. geomosaic
+  reads each strip once and never revisits it, so a bigger cache only holds blocks nothing
+  will ask for again.
+
 - **The NISAR GDAL plugin trades bytes for latency.** With `gdal_NISAR.so` installed,
   `GRIMP_NISAR_DRIVER=remote` sends the big 2-D arrays through it for `/vsi` paths: the same
   band reads in ~100 s instead of 317 s, bit-identical, because it keeps ~30 range requests in

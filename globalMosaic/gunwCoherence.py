@@ -184,6 +184,15 @@ def mosaicTile(job):
                GDAL_HTTP_NETRC='YES', GDAL_HTTP_COOKIEFILE=cookies, GDAL_HTTP_COOKIEJAR=cookies,
                GDAL_DISABLE_READDIR_ON_OPEN='EMPTY_DIR', GDAL_HTTP_MAX_RETRY='5',
                GDAL_HTTP_RETRY_DELAY='10',
+               # GDAL's block cache defaults to 5% of PHYSICAL RAM, per process -- 6.2 GB on a
+               # 124 GB container, 25 GB on a 503 GB host -- and one per --nProc of these run at once, so the
+               # default is an out-of-memory waiting for a big --nProc. 256 MB is chosen, not
+               # merely small: a strip read spans two 512-row chunk rows of a GCOV band, which
+               # is 2 x 79 x ~1 MB of blocks, so 256 MB holds the whole working set of one read
+               # while 80 jobs hold 20 GB between them. geomosaic reads each strip once and
+               # never looks at it again, so a larger cache only retains blocks nothing will
+               # ask for. Overridable, like the vsicurl settings.
+               GDAL_CACHEMAX=os.environ.get('GDAL_CACHEMAX', '256'),
                CPL_VSIL_CURL_CHUNK_SIZE=os.environ.get('CPL_VSIL_CURL_CHUNK_SIZE', '4194304'),
                CPL_VSIL_CURL_CACHE_SIZE=os.environ.get('CPL_VSIL_CURL_CACHE_SIZE',
                                                        '268435456'))

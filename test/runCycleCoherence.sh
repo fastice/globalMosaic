@@ -89,6 +89,17 @@ echo "=== $(date) figure ==="
 # comparable by eye.
 # ascending keeps the plain name it has always had; anything else is tagged, so the two
 # cannot collide even if they are pointed at one ROOT
+# Only draw the figure if tiles were actually built. runGeomosaicTiles returns 1 both when
+# SOME tiles failed and when ALL did, so the exit status cannot tell them apart -- and on a
+# total failure globeFigure used to die with "RuntimeError: .../coherence: No such file or
+# directory" and the script then printed a cheerful "done:" line anyway. Observed on the
+# cycle-033 run that failed every tile for want of the NISAR driver.
+if ! ls "$W/tiles/coherence"/*.tif >/dev/null 2>&1; then
+    echo "=== $(date) no coherence tiles were built -- skipping the figure ===" >&2
+    echo "    see $W/summary.log and $W/jobs/*/log" >&2
+    exit 1
+fi
+
 SFX=""
 [ "$DIRECTION" != A ] && SFX="_$DIRECTION"
 globeFigure "$W/tiles/coherence" --out "$ROOT/coherence_cycle$CYCLE$SFX.png" \

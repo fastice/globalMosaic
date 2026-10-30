@@ -241,6 +241,15 @@ def runJob(jobDir, cmdBase, products, retries=2, s3Keys=None):
                # wanted twice and evicted in between, and gets downloaded twice. At 256 MB
                # the transfer is 1.10x the stored bytes, near the floor. The cache is per
                # process, so 32 jobs hold 8 GB.
+               # GDAL's block cache defaults to 5% of PHYSICAL RAM, per process -- 6.2 GB on a
+               # 124 GB container, 25 GB on a 503 GB host -- and one per --nProc of these run at once, so the
+               # default is an out-of-memory waiting for a big --nProc. 256 MB is chosen, not
+               # merely small: a strip read spans two 512-row chunk rows of a GCOV band, which
+               # is 2 x 79 x ~1 MB of blocks, so 256 MB holds the whole working set of one read
+               # while 80 jobs hold 20 GB between them. geomosaic reads each strip once and
+               # never looks at it again, so a larger cache only retains blocks nothing will
+               # ask for. Overridable, like the vsicurl settings.
+               GDAL_CACHEMAX=os.environ.get('GDAL_CACHEMAX', '256'),
                CPL_VSIL_CURL_CHUNK_SIZE=os.environ.get('CPL_VSIL_CURL_CHUNK_SIZE', '65536'),
                CPL_VSIL_CURL_CACHE_SIZE=os.environ.get('CPL_VSIL_CURL_CACHE_SIZE',
                                                        '268435456'))

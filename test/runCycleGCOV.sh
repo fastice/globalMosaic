@@ -70,6 +70,17 @@ echo "=== $(date) mosaicking at ${RES} m, $NPROC jobs ==="
 runGeomosaicTiles "$T" --work "$W" --granules "$GRANULES" --psResM "$RES" --nProc "$NPROC" \
     || echo "  WARNING: some tiles failed (see $W/summary.log); rerun to retry them"
 
+# Only draw the figure if tiles were actually built. runGeomosaicTiles returns 1 both when
+# SOME tiles failed and when ALL did, so the exit status cannot tell them apart -- and on a
+# total failure globeFigure used to die with "RuntimeError: .../gamma0: No such file or
+# directory" and the script then printed a cheerful "done:" line anyway. Observed on the
+# cycle-033 run that failed every tile for want of the NISAR driver.
+if ! ls "$W/tiles/gamma0"/*.tif >/dev/null 2>&1; then
+    echo "=== $(date) no gamma0 tiles were built -- skipping the figure ===" >&2
+    echo "    see $W/summary.log and $W/jobs/*/log" >&2
+    exit 1
+fi
+
 echo "=== $(date) figure ==="
 SFX=""
 [ "$DIRECTION" != A ] && SFX="_$DIRECTION"
