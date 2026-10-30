@@ -1,8 +1,9 @@
 # globalMosaic
 
 Global mosaics of NISAR products, built with the GrIMP `geomosaic` binary: **backscatter**
-from GCOV and **coherence** from GUNW, on either a lat/lon grid (for Google Earth) or an
-equal-area projected grid (EASE-Grid 2.0, Equal Earth, Wagner VII).
+from GCOV, **coherence** from GUNW, and the **dual-pol ratio** of a like-pol and a cross-pol
+backscatter mosaic, on either a lat/lon grid (for Google Earth) or an equal-area projected
+grid (EASE-Grid 2.0, Equal Earth, Wagner VII).
 
 Granules are read where they sit at ASF over `/vsicurl/`; nothing is downloaded in bulk.
 
@@ -42,7 +43,7 @@ only reading the granules needs the login.
 
 ---
 
-## The two products
+## The three products
 
 ### Backscatter (GCOV → gamma0)
 
@@ -76,6 +77,43 @@ Tiles are Float32 **0–1 linear**, no data NaN. `gunwCoherence` writes a ~1.5 k
 granule that points at the coherence array at ASF and lets `geomosaic -geo` read windows from
 it; nothing is copied locally.
 
+### Dual-pol ratio (GCOV like-pol / cross-pol)
+
+openSEPPO's `-dpratio` recipe: like-pol over cross-pol, `DH` -> HHHH/HVHV, `DV` -> VVVV/VHVH,
+`QP` -> HHHH/HVHV.
+
+```bash
+bash test/runCycleRatio.sh 033                      # both bands, the ratio and the figure
+MODE=amp bash test/runCycleRatio.sh 033
+```
+
+Because geomosaic writes gamma0 as int16 dB x 100, the ratio is arithmetic on two dB mosaics,
+so `ratioMosaic` needs nothing from the C:
+
+| `--mode` | value | type | no data |
+|---|---|---|---|
+| `dB` (default) | `likeDb - crossDb` | Float32 | NaN |
+| `pwr` | `10 ** (d / 10)` | Float32 | NaN |
+| `amp` | `10 ** (d / 20) * 1000`, clipped [1, 65535] | UInt16 | 0 |
+| `DN` | `d * dnSlope + 127`, clipped [1, 255] | Byte | 0 |
+
+A pixel is no data where **either** input is, and for `amp`/`DN` that is decided *before*
+clipping, so a saturated pixel saturates instead of vanishing. `dB` and `amp` are exact;
+`DN` is not, because the recipe defines it on openSEPPO's own byte rendering without giving
+the dB-to-DN scaling -- hence the explicit `--dnSlope`, default 1 DN/dB.
+
+**The two bands must come from the same granule at every pixel**, or the ratio compares two
+acquisitions. That is what `easeTiles --ratioCover` (like-pol) and `--crossPol` (cross-pol)
+are for: both restrict the cover to granules that *have* a cross-pol term, dropping `SH` and
+`SV`, and the cover is deterministic given the same candidates, so the two runs agree. Use
+`--allowV` as well or `DV` granules never reach the cover.
+
+**An existing like-pol mosaic cannot be reused for a ratio.** Built without `--ratioCover`,
+its cover includes single-pol granules; the cross-pol pass skips those and fills the pixels
+from a different acquisition, and the result looks fine exactly where it is wrong. Expect the
+ratio to cover less ground than a plain backscatter mosaic too -- about 72% of cycle-30
+granules carry a cross-pol term.
+
 ---
 
 ## Ready-made drivers (`test/`)
@@ -85,6 +123,7 @@ it; nothing is copied locally.
 | `runEaseMosaic.sh` | one global backscatter mosaic from every cycle (fill catalogues), projected |
 | `runCycleGCOV.sh <cycle>` | backscatter for ONE cycle, minimal cover |
 | `runCycleCoherence.sh <cycle>` | coherence for ONE cycle, every overlapping pair averaged |
+| `runCycleRatio.sh <cycle>` | dual-pol ratio for ONE cycle: like-pol + cross-pol on one cover, then the ratio |
 | `rebuildAllGCOV.sh` / `rebuildAllCoherence.sh` | wipe and rebuild a series of cycles |
 | `makeGoogleEarth.sh`, `runFull.sh`, `runSmoke.sh` | the lat/lon Google Earth product |
 
@@ -149,6 +188,7 @@ not an EPSG code.
 | `scanMasks` | valid-DATA footprints of GCOV (from the mask) or GUNW (where coherence is finite), for `--validFootprints` |
 | `runGeomosaicTiles` | run `geomosaic` per tile, crop the feather margin, build the VRT hierarchy, draw a live progress picture |
 | `gunwCoherence` | coherence tiles via `geomosaic -geo`, on any tiling including ones PROJ cannot invert |
+| `ratioMosaic` | dual-pol ratio of a like-pol and a cross-pol mosaic (`dB`/`pwr`/`amp`/`DN`), streamed blockwise |
 | `mosaicCoherence` | the older lat/lon coherence path (warps each granule; also builds Google Earth) |
 | `frameStatistics`, `mosaicStatistics` | temporal mean/sigma/CV per frame, then mosaicked with `-geo` |
 | `globeFigure` | the mosaic as a globe on filled ocean, in its own projection |
@@ -202,6 +242,9 @@ not an EPSG code.
   extra bytes and ~30 sockets per job turn into a liability. Off by default; use it for one or
   a few jobs, not a 32-way global run. It is 6-10x SLOWER on local files and never used for
   them.
+- **A ratio needs its own cover.** Both bands must come from one granule per pixel, so the
+  like-pol half of a ratio pair is built with `easeTiles --ratioCover`, not reused from a
+  normal backscatter run. Single-pol granules (`SH`, `SV`) have no cross-pol term at all.
 - **Per-cycle series take one cycle only.** `--fillCatalogues` closes gaps by borrowing other
   cycles, which is right for a single best-coverage product and wrong for a time series.
 

@@ -36,6 +36,7 @@ granule mode additionally fetches temporary S3 credentials from ASF using the sa
 |---|---|---|---|
 | backscatter, gamma0, sigma0, "an image", "how it looks" | **GCOV** | `runGeomosaicTiles` | int16, dB x 100, no data −3000 |
 | coherence, correlation, "how well it correlates", InSAR quality | **GUNW** | `gunwCoherence` | Float32, 0–1 linear, no data NaN |
+| ratio, dual-pol ratio, cross-pol, "HH over HV", vegetation/structure | **GCOV, two bands** | `test/runCycleRatio.sh` | per `--mode`: Float32 dB (default), or pwr/amp/DN |
 
 They differ in one more way that matters. Backscatter takes the **minimal cover** — one good
 observation per place, best bandwidth first. Coherence takes `--allGranules`, so every
@@ -128,6 +129,27 @@ runGeomosaicTiles run/tiles --work run --granules vsicurl --psResM 1000 --nProc 
     --tiles $(tilesFor run/tiles --bbox 10 35 45 72 --names)
 globeFigure run/tiles/gamma0 --out europe.png --width 4000 --coast
 ```
+
+**A dual-pol ratio for one cycle** (openSEPPO's `-dpratio`: like-pol / cross-pol):
+
+```bash
+bash test/runCycleRatio.sh 033          # MODE=dB (default), pwr, amp or DN
+```
+
+Two things to say to the user before running it, because both surprise people:
+
+- **Their existing like-pol mosaic cannot be reused.** A ratio needs both bands from the SAME
+  granule at every pixel, so the cover must be restricted to granules that have a cross-pol
+  term (`easeTiles --ratioCover` for the like-pol half, `--crossPol` for the cross-pol half;
+  both drop `SH` and `SV`). A like-pol mosaic built normally includes single-pol granules, the
+  cross-pol pass skips those, different granules win those pixels, and the ratio then compares
+  two acquisitions while looking perfectly healthy.
+- **It covers less ground** than a plain backscatter mosaic: about 72% of cycle-030 granules
+  carry a cross-pol term, so single-pol acquisitions are simply holes.
+
+`dB` and `amp` are exact. `DN` is not -- the recipe defines it on openSEPPO's own byte
+rendering and does not give the dB-to-DN scaling, so `ratioMosaic --dnSlope` is explicit and
+defaults to 1 DN/dB.
 
 **A coherence series over several cycles:**
 

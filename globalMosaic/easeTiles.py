@@ -317,6 +317,23 @@ def main():
     ap.add_argument('--direction', choices=['A', 'D', 'both'], default='both',
                     help='orbit direction from the file name [both]')
     ap.add_argument('--allowV', action='store_true', help='also use V-only granules')
+    ap.add_argument('--ratioCover', action='store_true',
+                    help='restrict the cover to granules that HAVE a cross-pol term (drops SH '
+                         'and SV) but still tile the LIKE-pol term. This is the like-pol half '
+                         'of a ratio pair: run it and --crossPol separately, and because the '
+                         'cover is deterministic given the same candidates, both land on the '
+                         'same granule at every pixel. An existing like-pol mosaic built '
+                         'WITHOUT this cannot be reused for a ratio -- its cover includes '
+                         'single-pol granules, so the cross-pol pass would fill those pixels '
+                         'from a different acquisition.')
+    ap.add_argument('--crossPol', action='store_true',
+                    help='tile the CROSS-pol term (HV from DH/QP, VH from DV) instead of the '
+                         'like-pol one, for a dual-pol ratio product. Restricts the cover to '
+                         'granules that have a cross-pol term at all: SH and SV are single-pol '
+                         'and are dropped. Run this ONCE and point both the like-pol and the '
+                         'cross-pol mosaic at the same tiling, so the same granule wins each '
+                         'pixel in both and the ratio compares one acquisition with itself. '
+                         'DV needs --allowV as well, or the V granules never reach the cover.')
     args = ap.parse_args()
 
     isGlobal = args.hemisphere == 'global'
@@ -342,9 +359,11 @@ def main():
                   f'  (needs a geomosaic with the GP_GENERIC SRS fixes)', flush=True)
     else:
         epsg = EPSG[args.hemisphere]
-    cands = loadGranules(args.catalogue, allowV=args.allowV)
+    # --crossPol implies the restricted cover; --ratioCover is the same cover, like-pol term
+    ratioCover = args.crossPol or args.ratioCover
+    cands = loadGranules(args.catalogue, allowV=args.allowV, crossPol=ratioCover)
     for k, fc in enumerate(args.fillCatalogues, 1):
-        cands += loadGranules(fc, allowV=args.allowV, fill=k)
+        cands += loadGranules(fc, allowV=args.allowV, fill=k, crossPol=ratioCover)
     if args.fillCatalogues:
         print(f'{len(cands)} granules including {len(args.fillCatalogues)} fill catalogue(s)',
               flush=True)
@@ -424,7 +443,7 @@ def main():
         if not picks:
             continue
         nTiles += 1
-        writeTile(args.out, name, picks, used)
+        writeTile(args.out, name, picks, used, crossPol=args.crossPol)
         x0, y0, x1, y1 = b.bounds
         bw = {}
         for g, _ in picks:

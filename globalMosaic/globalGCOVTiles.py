@@ -68,6 +68,12 @@ GUNW_NAME = re.compile(r'NISAR_L2_PR_GUNW_(\d{3})_(\d{3})_([AD])_(\d{3})_(\d{3})
                        r'([A-Z]{2})_.*_([PX]\d{5})_[A-Z]_([FP])_[A-Z]_(\d{3})$')
 HPOLS = ('SH', 'DH', 'QP')
 VPOLS = ('SV', 'DV')
+# The cross-pol covariance term each acquisition mode carries, for the dual-pol ratio product
+# (openSEPPO's -dpratio: like/cross). SH and SV are single-pol and have NO cross-pol term, so a
+# cover for a ratio product must exclude them -- otherwise the cross-pol pass skips the granule
+# the like-pol pass chose, a different granule wins those pixels, and the ratio silently
+# compares two acquisitions. QP carries both HV and VH; HV is used, matching the recipe.
+CROSSPOL = {'DH': 'HV', 'DV': 'VH', 'QP': 'HV'}
 # lat0, lat1, tile height, tile width, lonMult
 # poleward of +-84 deg a lat/lon tile degenerates (E-W pixel size -> 0 at the pole), so each cap
 # is one polar stereographic tile instead (EPSG 3031 south, 3413 north)
@@ -186,7 +192,7 @@ def searchCatalogue(cycle, outFile, product='GCOV'):
     return outFile
 
 
-def loadGranules(catalogue, allowV=False, fill=0):
+def loadGranules(catalogue, allowV=False, fill=0, crossPol=False):
     grans = []
     feats = json.load(open(catalogue))['features']
     # keep one copy per scene (P over X, then highest version) -- also for catalogues written
@@ -202,6 +208,8 @@ def loadGranules(catalogue, allowV=False, fill=0):
         p = parseName(name, allowV)
         if p is None:
             continue
+        if crossPol and p['pol'] not in CROSSPOL:
+            continue            # single-pol: no cross-pol term to ratio against
         p.update(name=name, url=f['properties'].get('url', ''), raw=f['geometry'],
                  geom=unwrap(shape(f['geometry']).buffer(0)), fill=fill)
         grans.append(p)
@@ -298,7 +306,7 @@ def greedyCover(masks, shape2d, minNewFrac, forced=(), target=None):
     return picks, coverage, int(union.sum()), nx * ny
 
 
-def writeTile(outDir, name, picks, used):
+def writeTile(outDir, name, picks, used, crossPol=False):
     ''' Selected granules of one tile: a CSV, and one geomosaic yaml per frequency/pol group. '''
     with open(f'{outDir}/tiles/{name}.csv', 'w', newline='') as fp:
         w = csv.writer(fp)
@@ -311,9 +319,11 @@ def writeTile(outDir, name, picks, used):
     for g, _ in picks:
         byFreq[(g['freq'], 'H' if g['pol'] in HPOLS else 'V')].append(g)
     for (freq, p), gs in byFreq.items():
-        with open(f'{outDir}/tiles/{name}.{freq}{p}{p}.yaml', 'w') as fp:
+        # geomosaic doubles a two-character term, so HH -> HHHH and HV -> HVHV
+        term = ('HV' if p == 'H' else 'VH') if crossPol else f'{p}{p}'
+        with open(f'{outDir}/tiles/{name}.{freq}{term}.yaml', 'w') as fp:
             fp.write(f'# {name}: {len(gs)} granules, frequency {freq}\n'
-                     f'polarization: {p}{p}\nfrequency: {freq}\nuseMask: true\nfiles:\n')
+                     f'polarization: {term}\nfrequency: {freq}\nuseMask: true\nfiles:\n')
             for g in gs:
                 fp.write(f'  - {g["name"]}.h5\n')
 
