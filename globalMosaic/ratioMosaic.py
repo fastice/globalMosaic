@@ -121,6 +121,44 @@ def dbToDn(db, minDb=MINDB, maxDb=MAXDB):
     return dn
 
 
+def samplePercentiles(bL, bC, ndL, ndC, mode, minDb, maxDb, lo, hi, maxPx=4000000):
+    """Per-band stretch limits, from a decimated read of the whole mosaic.
+
+    Decimated rather than full: the percentiles of a 1-in-N sample of a global raster are
+    indistinguishable from the real ones for this purpose, and it avoids a second full pass.
+    """
+    nx, ny = bL.XSize, bL.YSize
+    step = max(1, int(round((nx * ny / maxPx) ** 0.5)))
+    w, h = max(1, nx // step), max(1, ny // step)
+    def readSmall(b, nd):
+        a = b.ReadAsArray(0, 0, nx, ny, buf_xsize=w, buf_ysize=h)
+        if np.issubdtype(a.dtype, np.integer):
+            bad = (a == (DBNODATA if nd is None else int(nd)))
+            out = a.astype('f4') / DBSCALE
+        else:
+            out = a.astype('f4')
+            bad = ~np.isfinite(out) if nd is None else (out == np.float32(nd))
+        out[bad] = np.nan
+        return out
+    bands, valid = combine(readSmall(bL, ndL), readSmall(bC, ndC), mode, minDb, maxDb)
+    lims = []
+    for v in bands:
+        s = v[valid & np.isfinite(v) & (v > 0)]
+        lims.append((float(np.percentile(s, lo)), float(np.percentile(s, hi)))
+                    if s.size else (1.0, 255.0))
+    print(f'  stretch from a {w}x{h} sample ({lo}-{hi} percentile): '
+          + ', '.join(f'{a:.0f}-{b:.0f}' for a, b in lims), flush=True)
+    return lims
+
+
+def applyStretch(v, lim, clip):
+    """Linear stretch of one band onto the output range."""
+    lo, hi = lim
+    if hi <= lo:
+        return v
+    return (v - lo) / (hi - lo) * (clip[1] - clip[0]) + clip[0]
+
+
 def combine(likeDb, crossDb, mode, minDb, maxDb):
     '''The recipe. Returns (list of bands, validMask).'''
     if mode in ('dB', 'pwr', 'amp'):
@@ -159,6 +197,13 @@ def main():
                     help=f'dB mapped to DN {MINDN} [{MINDB}]')
     ap.add_argument('--maxDb', type=float, default=MAXDB,
                     help=f'dB mapped to DN {MAXDN} [{MAXDB}]')
+    ap.add_argument('--stretch', type=float, nargs=2, metavar=('LO', 'HI'), default=None,
+                    help='per-band percentile stretch for --mode rgb, e.g. --stretch 2 98. '
+                         'OFF by default, which writes raw DN. The published map applies a '
+                         'stretch from SEPPO (a separate package from openSEPPO), which is '
+                         'not documented, so there is nothing to reproduce -- this is for '
+                         'dialling in an appearance. Note it makes the output a BROWSE image, '
+                         'not DN data.')
     ap.add_argument('--likeNodata', type=float, default=None)
     ap.add_argument('--crossNodata', type=float, default=None)
     args = ap.parse_args()
@@ -185,6 +230,13 @@ def main():
         ob.SetNoDataValue(float(outNodata) if np.isfinite(outNodata) else float('nan'))
         ob.SetDescription(names[i])
 
+    lims = None
+    if args.stretch is not None:
+        if args.mode != 'rgb':
+            sys.exit('ratioMosaic: --stretch applies to --mode rgb only')
+        lims = samplePercentiles(bL, bC, ndL, ndC, args.mode, args.minDb, args.maxDb,
+                                 args.stretch[0], args.stretch[1])
+
     nValid = nTotal = nGrey = 0
     for y in range(0, ny, BLOCK):
         h = min(BLOCK, ny - y)
@@ -193,9 +245,17 @@ def main():
             lk = readDb(bL, x, y, w, h, ndL)
             cr = readDb(bC, x, y, w, h, ndC)
             vals, valid = combine(lk, cr, args.mode, args.minDb, args.maxDb)
+            grey = None
             if args.mode == 'rgb':
-                nGrey += int(np.count_nonzero(np.isfinite(lk) & ~np.isfinite(cr)))
+                grey = np.isfinite(lk) & ~np.isfinite(cr)
+                nGrey += int(np.count_nonzero(grey))
             for i, v in enumerate(vals):
+                if lims is not None:
+                    # Single-pol ground has R == G == B, and stretching each band by its own
+                    # limits would tint it -- the greyscale fallback would come out coloured.
+                    # So those pixels take the RED band's stretch in all three.
+                    v = np.where(grey, applyStretch(v, lims[0], clip),
+                                 applyStretch(v, lims[i], clip))
                 if clip is not None:
                     v = np.clip(np.nan_to_num(v, nan=0.0), *clip)
                 out.GetRasterBand(i + 1).WriteArray(

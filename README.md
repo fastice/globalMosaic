@@ -95,12 +95,26 @@ so `ratioMosaic` needs nothing from the C:
 | `dB` (default) | `likeDb - crossDb` | Float32 | NaN |
 | `pwr` | `10 ** (d / 10)` | Float32 | NaN |
 | `amp` | `10 ** (d / 20) * 1000`, clipped [1, 65535] | UInt16 | 0 |
-| `DN` | `d * dnSlope + 127`, clipped [1, 255] | Byte | 0 |
+| `DN` | `DN(like) - DN(cross) + 127`, clipped [1, 255] | Byte | 0 |
+| `rgb` | R = DN(like), G = DN(cross), B = the DN ratio | 3 x Byte | 0 |
 
 A pixel is no data where **either** input is, and for `amp`/`DN` that is decided *before*
-clipping, so a saturated pixel saturates instead of vanishing. `dB` and `amp` are exact;
-`DN` is not, because the recipe defines it on openSEPPO's own byte rendering without giving
-the dB-to-DN scaling -- hence the explicit `--dnSlope`, default 1 DN/dB.
+clipping, so a saturated pixel saturates instead of vanishing. DN follows openSEPPO's
+`power_to_dn_uint8` -- `dB = -31.15 + DN * 0.15`, clamped, DN 0 reserved -- and `DN`/`rgb`
+difference the CLAMPED DNs, which is not the same as scaling the dB difference: cross-pol
+below -31 dB pins to DN 1, routine over desert and water.
+
+`rgb` is the published false-colour composite, and for it the **like-pol input should be the
+FULL-cover mosaic**: where there is no cross-pol, all three bands take DN(like) so single-pol
+ground -- the ice sheets, and the 16% of the globe acquired 5 MHz VV -- renders as greyscale
+backscatter instead of dropping out.
+
+`--stretch LO HI` applies a per-band percentile stretch (off by default, which writes raw DN).
+Single-pol pixels take the RED band's limits in all three bands, or the greyscale fallback
+would come out tinted. There is no published stretch to match: the reference map is scaled by
+**SEPPO**, a separate package from openSEPPO, and its scaling is not documented. Note also
+that cross-pol is always weaker than like-pol, so `B` is confined to [127, 255] and blue never
+falls below mid scale -- a raw DN composite cannot render forest as pale yellow.
 
 **The two bands must come from the same granule at every pixel**, or the ratio compares two
 acquisitions. That is what `easeTiles --ratioCover` (like-pol) and `--crossPol` (cross-pol)
