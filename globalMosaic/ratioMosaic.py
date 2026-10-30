@@ -14,9 +14,9 @@ on two dB rasters.
   DN    DN(like) - DN(cross) + 127                 uint8,  clipped [1, 255],   0 no data
   rgb   R = DN(like), G = DN(cross), B = the DN ratio above
 
-`rgb` is the published rendering, and it is a composite rather than a colour map: forests come
-out pale yellow (R+G), bare ground deep indigo (HV at the noise floor, so B dominates), rough
-or sparsely vegetated ground lavender. WHERE THERE IS NO CROSS-POL -- single-pol SH/SV
+`rgb` is the published rendering, and it is a composite rather than a colour map: bare ground
+comes out deep indigo (cross-pol at the noise floor, so B dominates), vegetated ground greener
+and less blue as the ratio falls. WHERE THERE IS NO CROSS-POL -- single-pol SH/SV
 acquisitions, which is how the ice sheets are taken -- all three bands are set to DN(like), so
 those areas render as GREYSCALE backscatter instead of dropping out.
 
