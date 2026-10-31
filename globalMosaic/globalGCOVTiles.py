@@ -374,6 +374,13 @@ def main():
                     help='with --exclude5MHzOcean: mid-latitude limit |lat| [60]')
     ap.add_argument('--direction', choices=['A', 'D', 'both'], default='both',
                     help='orbit direction by file name [both]')
+    ap.add_argument('--ratioCover', action='store_true',
+                    help='restrict the cover to granules that HAVE a cross-pol term (drops SH '
+                         'and SV) but still tile the LIKE-pol term -- the like-pol half of a '
+                         'ratio pair. See easeTiles for why both halves need one cover.')
+    ap.add_argument('--crossPol', action='store_true',
+                    help='tile the CROSS-pol term (HV from DH/QP, VH from DV) instead of the '
+                         'like-pol one, on the same restricted cover. DV needs --allowV too.')
     ap.add_argument('--allowV', action='store_true',
                     help='use the V channel of granules that have no H channel (e.g. 5 MHz SV-only '
                     'modes over land); the channel used is in each tile CSV')
@@ -398,9 +405,11 @@ def main():
     os.makedirs(f'{args.out}/tiles', exist_ok=True)
     catalogue = args.catalogue or searchCatalogue(args.cycle, f'{args.out}/catalogue.geojson', args.product)
     nCat = len(json.load(open(catalogue))['features'])
-    grans = loadGranules(catalogue, args.allowV)
+    # --crossPol implies the restricted cover; --ratioCover is the same cover, like-pol term
+    ratioCover = args.crossPol or args.ratioCover
+    grans = loadGranules(catalogue, args.allowV, crossPol=ratioCover)
     for k, fc in enumerate(args.fillCatalogues, 1):
-        grans += loadGranules(fc, args.allowV, fill=k)
+        grans += loadGranules(fc, args.allowV, fill=k, crossPol=ratioCover)
     nAll = len(grans)
     byName = {g['name']: g for g in grans}          # before any filtering: kept picks stay usable
     gapOf = {}
@@ -486,7 +495,7 @@ def main():
         stats['tiles'] += 1
         stats['available'] += len(cands)
         stats['selected'] += len(picks)
-        writeTile(args.out, name, picks, used)
+        writeTile(args.out, name, picks, used, crossPol=args.crossPol)
         feats.append({'type': 'Feature', 'geometry': mapping(tbox), 'properties': dict(
             name=name, kind='latlon', epsg=4326, **band, available=len(cands), selected=len(picks),
             coverage=round(float(coverage), 4), unionFrac=round(unionCells / nCells, 4),
@@ -507,7 +516,7 @@ def main():
             sign, epsg, cands, args.marginKm, 2000., args.minNewFrac, forced, target)
         if not picks:
             continue
-        writeTile(args.out, name, picks, used)
+        writeTile(args.out, name, picks, used, crossPol=args.crossPol)
         stats['tiles'] += 1
         stats['available'] += len(cands)
         stats['selected'] += len(picks)
