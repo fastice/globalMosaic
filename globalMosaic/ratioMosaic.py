@@ -84,10 +84,16 @@ def align(ref, other):
     nd = other.GetRasterBand(1).GetNoDataValue()
     print(f'  aligning {other.RasterXSize}x{other.RasterYSize} onto '
           f'{ref.RasterXSize}x{ref.RasterYSize}', flush=True)
-    return gdal.Warp('', other, format='VRT', outputBounds=(min(x0, x1), min(y0, y1),
-                                                            max(x0, x1), max(y0, y1)),
-                     xRes=abs(gtR[1]), yRes=abs(gtR[5]), resampleAlg='near',
-                     srcNodata=nd, dstNodata=nd)
+    # BuildVRT, not Warp. Warp constructs a coordinate transformation even when the CRS is
+    # unchanged and only the extent differs, and Wagner VII has no inverse in PROJ -- so it
+    # fails with "Inverse operation for wag7 is not available". BuildVRT just places the
+    # source on the requested grid and pads the rest with no data, which is all that is
+    # wanted: the two mosaics already share a CRS and a pixel lattice, so nothing is resampled
+    # and no transformation is needed. (globeFigure's readRaster carries the same warning.)
+    return gdal.BuildVRT('', [other], outputBounds=(min(x0, x1), min(y0, y1),
+                                                     max(x0, x1), max(y0, y1)),
+                         xRes=abs(gtR[1]), yRes=abs(gtR[5]),
+                         srcNodata=nd, VRTNodata=nd)
 
 
 def readDb(band, x, y, w, h, nodata):
