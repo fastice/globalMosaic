@@ -108,7 +108,19 @@ echo "=== $(date) ratio ($MODE) ==="
 # brightest thing in the image. Off unless asked for: MINCROSS=-28 bash test/runCycleRatio.sh
 mcArg=()
 [ -n "${MINCROSS:-}" ] && mcArg=(--minCross "$MINCROSS")
-ratioMosaic "$L" "$C" --mode "$MODE" "${mcArg[@]}" \
+# BASE is the FULL-cover like-pol (a plain runCycleGCOV product). For MODE=rgb it supplies the
+# greyscale over ground acquired single-pol throughout -- the ice sheets -- which the ratio
+# cover excludes outright and so has no data for. Defaults to the gcov product for this cycle
+# if it is there; harmless when it is not.
+BASE=${BASE:-$(ls -d /scratch/ianj/mosaics/gcov/cycle$CYCLE/tiles/gamma0 2>/dev/null || true)}
+baseArg=()
+if [ "$MODE" = rgb ] && [ -n "$BASE" ] && [ -e "$BASE" ]; then
+    baseArg=(--base "$BASE")
+    echo "=== $(date) greyscale base: $BASE"
+elif [ "$MODE" = rgb ]; then
+    echo "=== $(date) no greyscale base (set BASE=...); single-pol ground will be EMPTY" >&2
+fi
+ratioMosaic "$L" "$C" --mode "$MODE" "${mcArg[@]}" "${baseArg[@]}" \
     --out "$ROOT/ratio${MODE}_cycle$CYCLE$SFX.tif" || exit 1
 
 # globeFigure's defaults are wrong for a ratio and fail SILENTLY: for a Float32 raster it
