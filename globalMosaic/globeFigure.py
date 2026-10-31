@@ -67,14 +67,18 @@ def readRaster(src, width):
                          noData=NODATA if nd is None else nd)
     isInt = gdal.GetDataTypeName(out.GetRasterBand(1).DataType).startswith('Int')
     a = out.ReadAsArray().astype('f4')
-    if a.ndim == 3:
+    # A 3-band raster is the dual-pol RGB composite (R = like, G = cross, B = ratio) and all
+    # three bands are kept. Anything else many-banded is a stack we only want the first of.
+    if a.ndim == 3 and a.shape[0] != 3:
         a = a[0]
     gt = out.GetGeoTransform()
     crs = out.GetSpatialRef()
-    ny, nx = a.shape
+    ny, nx = a.shape[-2:]
     ext = [gt[0], gt[0] + nx * gt[1], gt[3] + ny * gt[5], gt[3]]
     del out, ds
-    return np.where(a == NODATA, np.nan, a), ext, crs, isInt
+    # Mask on the file's OWN no-data, not the backscatter sentinel: the RGB composite uses 0,
+    # and masking it against -3000 would leave its no-data as solid black.
+    return np.where(a == (NODATA if nd is None else nd), np.nan, a), ext, crs, isInt
 
 
 def main():
@@ -128,9 +132,20 @@ def main():
     ax.fill(bx, by, facecolor=args.ocean, edgecolor='none', zorder=1)
     if args.coast or args.graticule:
         overlays(ax, crs, args)
-    with np.errstate(invalid='ignore'):
-        g = np.clip((grey / scale - vMin) / (vMax - vMin), 0., 1.)
-    rgba = np.dstack([g, g, g, np.where(np.isfinite(g), 1., 0.)])
+    if grey.ndim == 3:
+        # the RGB composite: bands are DN 1..255 already, so the default range is 0..255 and
+        # --dbMin/--dbMax only override it. Alpha comes from the red band, which is like-pol
+        # and is present wherever anything is -- including single-pol ground, where all three
+        # bands are equal and the pixel renders grey.
+        lo = args.vMin if args.vMin is not None else 0.
+        hi = args.vMax if args.vMax is not None else 255.
+        with np.errstate(invalid='ignore'):
+            g = np.clip((grey - lo) / (hi - lo), 0., 1.)
+        rgba = np.dstack([g[0], g[1], g[2], np.where(np.isfinite(g[0]), 1., 0.)])
+    else:
+        with np.errstate(invalid='ignore'):
+            g = np.clip((grey / scale - vMin) / (vMax - vMin), 0., 1.)
+        rgba = np.dstack([g, g, g, np.where(np.isfinite(g), 1., 0.)])
     im = ax.imshow(rgba, extent=ext, interpolation='nearest', zorder=3)
     # Clip to the map: tiles built before the Wagner VII inverse rejected |lon| > 180 carry a
     # mirrored sliver of data outside the lens, and nothing outside it is meaningful anyway.
@@ -146,8 +161,10 @@ def main():
         ax.set_title(args.title, fontsize=13)
     fig.tight_layout(pad=0.2)
     fig.savefig(args.out, dpi=args.dpi, facecolor=fig.get_facecolor())
-    valid = np.isfinite(grey).mean() * 100.
-    print(f'{args.out}: {grey.shape[1]} x {grey.shape[0]} px, {valid:.1f}% of the frame has data')
+    band0 = grey[0] if grey.ndim == 3 else grey
+    valid = np.isfinite(band0).mean() * 100.
+    print(f'{args.out}: {band0.shape[1]} x {band0.shape[0]} px, '
+          f'{valid:.1f}% of the frame has data' + (' (RGB composite)' if grey.ndim == 3 else ''))
 
 
 def overlays(ax, crs, args):
