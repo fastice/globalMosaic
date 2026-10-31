@@ -105,9 +105,25 @@ SFX=""
 echo "=== $(date) ratio ($MODE) ==="
 ratioMosaic "$L" "$C" --mode "$MODE" --out "$ROOT/ratio${MODE}_cycle$CYCLE$SFX.tif" || exit 1
 
-echo "=== $(date) figure ==="
-globeFigure "$ROOT/ratio${MODE}_cycle$CYCLE$SFX.tif" \
-    --out "$ROOT/ratio${MODE}_cycle$CYCLE$SFX.png" --width "${QLPX:-6000}" --coast \
-    --title "NISAR dual-pol ratio ($MODE), cycle $CYCLE, direction $DIRECTION"
+# globeFigure's defaults are wrong for a ratio and fail SILENTLY: for a Float32 raster it
+# stretches 0..1 (the coherence range), and a dB ratio runs 0..25, so every pixel saturates
+# and the figure comes out ALL WHITE. Give it a range per mode. rgb is skipped entirely --
+# globeFigure renders band 1 only, so it would show the red channel alone, not the composite.
+case "$MODE" in
+    dB)  VMIN=${VMIN:-0};    VMAX=${VMAX:-15} ;;
+    pwr) VMIN=${VMIN:-1};    VMAX=${VMAX:-30} ;;
+    amp) VMIN=${VMIN:-1000}; VMAX=${VMAX:-10000} ;;
+    DN)  VMIN=${VMIN:-127};  VMAX=${VMAX:-255} ;;
+    rgb) VMIN=; VMAX= ;;
+esac
+if [ "$MODE" = rgb ]; then
+    echo "=== $(date) no figure for rgb: it is a 3-band composite, open the tif directly ==="
+else
+    echo "=== $(date) figure (stretch $VMIN .. $VMAX) ==="
+    globeFigure "$ROOT/ratio${MODE}_cycle$CYCLE$SFX.tif" \
+        --out "$ROOT/ratio${MODE}_cycle$CYCLE$SFX.png" --width "${QLPX:-6000}" --coast \
+        --dbMin "$VMIN" --dbMax "$VMAX" \
+        --title "NISAR dual-pol ratio ($MODE), cycle $CYCLE, direction $DIRECTION"
+fi
 
 echo "=== $(date) done: $ROOT/ratio${MODE}_cycle$CYCLE$SFX.tif ==="
