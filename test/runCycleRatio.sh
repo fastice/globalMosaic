@@ -103,7 +103,13 @@ echo "=== $(date) cross $C"
 SFX=""
 [ "$DIRECTION" != A ] && SFX="_$DIRECTION"
 echo "=== $(date) ratio ($MODE) ==="
-ratioMosaic "$L" "$C" --mode "$MODE" --out "$ROOT/ratio${MODE}_cycle$CYCLE$SFX.tif" || exit 1
+# MINCROSS drops pixels whose cross-pol is at the noise floor, where the ratio is a lower
+# bound rather than a measurement -- open water above all, which otherwise renders as the
+# brightest thing in the image. Off unless asked for: MINCROSS=-28 bash test/runCycleRatio.sh
+mcArg=()
+[ -n "${MINCROSS:-}" ] && mcArg=(--minCross "$MINCROSS")
+ratioMosaic "$L" "$C" --mode "$MODE" "${mcArg[@]}" \
+    --out "$ROOT/ratio${MODE}_cycle$CYCLE$SFX.tif" || exit 1
 
 # globeFigure's defaults are wrong for a ratio and fail SILENTLY: for a Float32 raster it
 # stretches 0..1 (the coherence range), and a dB ratio runs 0..25, so every pixel saturates

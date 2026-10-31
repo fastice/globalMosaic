@@ -109,6 +109,13 @@ FULL-cover mosaic**: where there is no cross-pol, all three bands take DN(like) 
 ground -- the ice sheets, and the 16% of the globe acquired 5 MHz VV -- renders as greyscale
 backscatter instead of dropping out.
 
+`--minCross DB` drops pixels whose cross-pol is at or below a threshold. Once the denominator
+is at the noise floor (NESZ is about -25 dB for NISAR L-band) the ratio is a lower bound on a
+quantity that was not measured. Open water is the case that shows it: smooth water barely
+depolarises, HV sits at the floor, and the ratio comes out as the brightest thing in the
+scene. `-28` is a reasonable value; in `rgb` those pixels fall back to grey, like single-pol
+ground, so backscatter is still shown where the ratio is not.
+
 `--stretch LO HI` applies a per-band percentile stretch (off by default, which writes raw DN).
 Single-pol pixels take the RED band's limits in all three bands, or the greyscale fallback
 would come out tinted. There is no published stretch to match: the reference map is scaled by

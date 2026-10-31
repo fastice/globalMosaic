@@ -121,7 +121,8 @@ def dbToDn(db, minDb=MINDB, maxDb=MAXDB):
     return dn
 
 
-def samplePercentiles(bL, bC, ndL, ndC, mode, minDb, maxDb, lo, hi, maxPx=4000000):
+def samplePercentiles(bL, bC, ndL, ndC, mode, minDb, maxDb, lo, hi, minCross=None,
+                      maxPx=4000000):
     """Per-band stretch limits, from a decimated read of the whole mosaic.
 
     Decimated rather than full: the percentiles of a 1-in-N sample of a global raster are
@@ -140,7 +141,8 @@ def samplePercentiles(bL, bC, ndL, ndC, mode, minDb, maxDb, lo, hi, maxPx=400000
             bad = ~np.isfinite(out) if nd is None else (out == np.float32(nd))
         out[bad] = np.nan
         return out
-    bands, valid = combine(readSmall(bL, ndL), readSmall(bC, ndC), mode, minDb, maxDb)
+    bands, valid = combine(readSmall(bL, ndL), readSmall(bC, ndC), mode, minDb, maxDb,
+                           minCross)
     lims = []
     for v in bands:
         s = v[valid & np.isfinite(v) & (v > 0)]
@@ -159,8 +161,19 @@ def applyStretch(v, lim, clip):
     return (v - lo) / (hi - lo) * (clip[1] - clip[0]) + clip[0]
 
 
-def combine(likeDb, crossDb, mode, minDb, maxDb):
-    '''The recipe. Returns (list of bands, validMask).'''
+def combine(likeDb, crossDb, mode, minDb, maxDb, minCross=None):
+    '''The recipe. Returns (list of bands, validMask).
+
+    `minCross` drops pixels whose CROSS-pol is at or below a dB threshold. Once the
+    denominator is at the noise floor the ratio is a lower bound on a quantity that was not
+    measured, not a measurement -- which is why open water comes out as the brightest thing
+    in the scene: smooth water barely depolarises, so HV sits at NESZ (about -25 dB for NISAR
+    L-band) while HH is still real. Discarding those is more honest than stretching around
+    them. The pixels become no data, so in rgb they fall back to GREY if like-pol is valid,
+    exactly as single-pol ground does -- backscatter is still shown, the ratio is not.
+    '''
+    if minCross is not None:
+        crossDb = np.where(crossDb <= minCross, np.nan, crossDb)
     if mode in ('dB', 'pwr', 'amp'):
         d = likeDb - crossDb
         valid = np.isfinite(d)
@@ -204,6 +217,12 @@ def main():
                          'not documented, so there is nothing to reproduce -- this is for '
                          'dialling in an appearance. Note it makes the output a BROWSE image, '
                          'not DN data.')
+    ap.add_argument('--minCross', type=float, default=None, metavar='DB',
+                    help='drop pixels whose cross-pol is at or below this dB. Off by default; '
+                         '-28 is a reasonable floor for NISAR L-band (NESZ ~ -25 dB). Open '
+                         'water is the case: HV sits at the noise floor there, so the ratio '
+                         'is huge and meaningless, and it renders as the brightest thing in '
+                         'the image. In rgb these fall back to grey, like single-pol ground.')
     ap.add_argument('--likeNodata', type=float, default=None)
     ap.add_argument('--crossNodata', type=float, default=None)
     args = ap.parse_args()
@@ -235,7 +254,7 @@ def main():
         if args.mode != 'rgb':
             sys.exit('ratioMosaic: --stretch applies to --mode rgb only')
         lims = samplePercentiles(bL, bC, ndL, ndC, args.mode, args.minDb, args.maxDb,
-                                 args.stretch[0], args.stretch[1])
+                                 args.stretch[0], args.stretch[1], args.minCross)
 
     nValid = nTotal = nGrey = 0
     for y in range(0, ny, BLOCK):
@@ -244,10 +263,12 @@ def main():
             w = min(BLOCK, nx - x)
             lk = readDb(bL, x, y, w, h, ndL)
             cr = readDb(bC, x, y, w, h, ndC)
-            vals, valid = combine(lk, cr, args.mode, args.minDb, args.maxDb)
+            vals, valid = combine(lk, cr, args.mode, args.minDb, args.maxDb, args.minCross)
             grey = None
             if args.mode == 'rgb':
-                grey = np.isfinite(lk) & ~np.isfinite(cr)
+                usable = np.isfinite(cr) if args.minCross is None else \
+                    (np.isfinite(cr) & (cr > args.minCross))
+                grey = np.isfinite(lk) & ~usable
                 nGrey += int(np.count_nonzero(grey))
             for i, v in enumerate(vals):
                 if lims is not None:
