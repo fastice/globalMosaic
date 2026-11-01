@@ -157,6 +157,7 @@ granules carry a cross-pol term.
 | `runCycleGCOV.sh <cycle>` | backscatter for ONE cycle, minimal cover |
 | `runCycleCoherence.sh <cycle>` | coherence for ONE cycle, every overlapping pair averaged |
 | `runCycleRatio.sh <cycle>` | dual-pol ratio for ONE cycle: like-pol + cross-pol on one cover, then the ratio |
+| `runRatioTiles.sh <like> <cross> <out>` | false-colour composite (or dB ratio) TILES from a like-pol and cross-pol tile directory, with the settled stretch and a quicklook |
 | `rebuildAllGCOV.sh` / `rebuildAllCoherence.sh` | wipe and rebuild a series of cycles |
 | `makeGoogleEarth.sh`, `runFull.sh`, `runSmoke.sh` | the lat/lon Google Earth product |
 
