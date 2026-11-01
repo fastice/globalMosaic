@@ -157,6 +157,18 @@ def samplePercentiles(bL, bC, ndL, ndC, mode, minDb, maxDb, lo, hi, minCross=Non
     # vegetation comes out cream instead of yellow.
     colour = valid & ~((bands[0] == bands[1]) & (bands[1] == bands[2])) \
         if len(bands) == 3 else valid
+    # Grey ground -- ice sheets, desert where the cross-pol was dropped -- is a DIFFERENT
+    # population from vegetated dual-pol land, and much darker. Scaling it by the red band's
+    # colour-derived limits clips it: Sahara sand near -22 dB is DN ~60, below a red lower
+    # limit of ~65, so it goes black, and so does blue ice. Give it its own limits.
+    greyLims = None
+    if len(bands) == 3:
+        gm = valid & (bands[0] == bands[1]) & (bands[1] == bands[2])
+        s = bands[0][gm & np.isfinite(bands[0]) & (bands[0] > 0)]
+        if s.size:
+            greyLims = (float(np.percentile(s, lo)), float(np.percentile(s, hi)))
+            print(f'  grey stretch: {greyLims[0]:.0f}-{greyLims[1]:.0f} '
+                  f'({int(s.size)} grey px sampled)', flush=True)
     lims = []
     for v in bands:
         s = v[colour & np.isfinite(v) & (v > 0)]
@@ -166,7 +178,7 @@ def samplePercentiles(bL, bC, ndL, ndC, mode, minDb, maxDb, lo, hi, minCross=Non
                     if s.size else (1.0, 255.0))
     print(f'  stretch from a {w}x{h} sample ({lo}-{hi} percentile): '
           + ', '.join(f'{a:.0f}-{b:.0f}' for a, b in lims), flush=True)
-    return lims
+    return lims, greyLims
 
 
 def applyStretch(v, lim, clip):
@@ -248,6 +260,11 @@ def main():
                          'pass them here for every tile. Per-band scaling is also what makes '
                          'the colours work: raw DN is purple everywhere, because B is '
                          'confined to [127, 255] while G sits low.')
+    ap.add_argument('--greyLimits', type=float, nargs=2, metavar=('LO', 'HI'), default=None,
+                    help='stretch limits for GREY pixels -- single-pol ground and anywhere the '
+                         'ratio was dropped. They default to the red band\'s, which clips the '
+                         'dark ones black: Sahara sand near -22 dB is DN ~60, under a red lower '
+                         'limit set by vegetated land. Widen downward, e.g. 20 185.')
     ap.add_argument('--base', default=None, metavar='MOSAIC',
                     help='FULL-cover like-pol mosaic, for --mode rgb: supplies the greyscale '
                          'where the ratio cover has nothing, i.e. ground acquired single-pol '
@@ -294,6 +311,7 @@ def main():
         ob.SetDescription(names[i])
 
     lims = None
+    greyAuto = None
     if args.stretchLimits is not None:
         if args.mode != 'rgb':
             sys.exit('ratioMosaic: --stretchLimits applies to --mode rgb only')
@@ -303,8 +321,9 @@ def main():
     elif args.stretch is not None:
         if args.mode != 'rgb':
             sys.exit('ratioMosaic: --stretch applies to --mode rgb only')
-        lims = samplePercentiles(bL, bC, ndL, ndC, args.mode, args.minDb, args.maxDb,
-                                 args.stretch[0], args.stretch[1], args.minCross, bB, ndB)
+        lims, greyAuto = samplePercentiles(bL, bC, ndL, ndC, args.mode, args.minDb, args.maxDb,
+                                           args.stretch[0], args.stretch[1], args.minCross,
+                                           bB, ndB)
 
     nValid = nTotal = nGrey = 0
     for y in range(0, ny, BLOCK):
@@ -326,7 +345,9 @@ def main():
                     # Single-pol ground has R == G == B, and stretching each band by its own
                     # limits would tint it -- the greyscale fallback would come out coloured.
                     # So those pixels take the RED band's stretch in all three.
-                    v = np.where(grey, applyStretch(v, lims[0], clip),
+                    gl = args.greyLimits if args.greyLimits is not None else \
+                        (greyAuto if greyAuto is not None else lims[0])
+                    v = np.where(grey, applyStretch(v, gl, clip),
                                  applyStretch(v, lims[i], clip))
                 if clip is not None:
                     v = np.clip(np.nan_to_num(v, nan=0.0), *clip)
