@@ -149,9 +149,19 @@ def samplePercentiles(bL, bC, ndL, ndC, mode, minDb, maxDb, lo, hi, minCross=Non
         return out
     bands, valid = combine(readSmall(bL, ndL), readSmall(bC, ndC), mode, minDb, maxDb,
                            minCross, None if bB is None else readSmall(bB, ndB))
+    # Percentiles over the COLOUR pixels only. On grey ground -- ice sheets, and anywhere the
+    # cross-pol was dropped -- all three bands are copies of the red one, so including those
+    # pulls the blue limits down below 127, which the ratio band cannot reach by construction
+    # (B = DN(like) - DN(cross) + 127, and cross is never stronger than like). The real ratio
+    # range then gets squeezed into the top of the stretch, blue stays strong everywhere, and
+    # vegetation comes out cream instead of yellow.
+    colour = valid & ~((bands[0] == bands[1]) & (bands[1] == bands[2])) \
+        if len(bands) == 3 else valid
     lims = []
     for v in bands:
-        s = v[valid & np.isfinite(v) & (v > 0)]
+        s = v[colour & np.isfinite(v) & (v > 0)]
+        if s.size < 1000:                 # almost no dual-pol in the sample: fall back
+            s = v[valid & np.isfinite(v) & (v > 0)]
         lims.append((float(np.percentile(s, lo)), float(np.percentile(s, hi)))
                     if s.size else (1.0, 255.0))
     print(f'  stretch from a {w}x{h} sample ({lo}-{hi} percentile): '
