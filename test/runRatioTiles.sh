@@ -79,8 +79,29 @@ if [ "$N" -eq 0 ]; then
     exit 1
 fi
 
-gdalbuildvrt -vrtnodata 0 -overwrite "$OUT/$MODE.vrt" "$OUT/$MODE"/*.tif > /dev/null
-echo "=== $(date) $OUT/$MODE.vrt"
+# Lay the output out the way runGeomosaicTiles does -- vrt/<product>/<tile>.vrt per tile, a
+# global.vrt, and a run.yaml naming the tiling -- so makeGoogleEarthTiered can consume it
+# directly (it reads cfg['tileRun'] to find the per-tile CSVs and the catalogues beside them).
+# TILERUN is the tiling the CROSS-pol mosaic was built from; without it the Google Earth step
+# cannot run, but the tiles and the quicklook are still produced.
+mkdir -p "$OUT/vrt/$MODE"
+for f in "$OUT/$MODE"/*.tif; do
+    b=$(basename "$f" .tif); echo "${b%%.*}"
+done | sort -u | while read -r tile; do
+    gdalbuildvrt -vrtnodata 0 -overwrite "$OUT/vrt/$MODE/$tile.vrt" \
+        "$OUT/$MODE/$tile".*.tif > /dev/null 2>&1
+done
+gdalbuildvrt -vrtnodata 0 -overwrite "$OUT/vrt/$MODE/global.vrt" \
+    "$OUT/vrt/$MODE"/*.vrt > /dev/null 2>&1
+ln -sf "vrt/$MODE/global.vrt" "$OUT/$MODE.vrt" 2>/dev/null || \
+    gdalbuildvrt -vrtnodata 0 -overwrite "$OUT/$MODE.vrt" "$OUT/$MODE"/*.tif > /dev/null
+if [ -n "${TILERUN:-}" ]; then
+    printf 'tileRun: %s\nwork: %s\ngranules: vsicurl\n' "$TILERUN" "$OUT" > "$OUT/run.yaml"
+    echo "=== $(date) run.yaml -> tileRun $TILERUN   (makeGoogleEarthTiered $OUT --product $MODE)"
+else
+    echo "=== $(date) no TILERUN set: no run.yaml, so makeGoogleEarthTiered cannot run on this" >&2
+fi
+echo "=== $(date) $(ls "$OUT/vrt/$MODE"/*.vrt | wc -l) tile VRTs, $OUT/vrt/$MODE/global.vrt"
 
 if [ "$MODE" = rgb ]; then
     globeFigure "$OUT/$MODE.vrt" --out "$OUT/${MODE}_quicklook.png" --width "${QLPX:-6000}" \
