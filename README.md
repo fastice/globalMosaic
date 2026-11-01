@@ -116,6 +116,18 @@ depolarises, HV sits at the floor, and the ratio comes out as the brightest thin
 scene. `-28` is a reasonable value; in `rgb` those pixels fall back to grey, like single-pol
 ground, so backscatter is still shown where the ratio is not.
 
+**Per-band scaling is what makes the colours work.** Raw DN comes out purple almost
+everywhere: cross-pol is always weaker than like-pol, so `B` is confined to [127, 255] and
+never falls below mid scale, while `G` sits low because HV is weak. Yellow needs `G` above `B`,
+which in raw DN happens only where HV approaches HH -- i.e. RFI. Stretching each band over its
+own distribution puts vegetation's HV near the top of `G` and its low ratio near the bottom of
+`B`, which is where the published palette comes from.
+
+For TILES use `--stretchLimits R0 R1 G0 G1 B0 B1`, not `--stretch`: `--stretch` computes
+limits from whatever raster it is handed, so stretching per tile gives every tile its own and
+the mosaic comes out patchwork. Run `--stretch` once on a decimated copy of the assembled
+mosaic, take the six numbers it prints, and pass them to every tile.
+
 `--stretch LO HI` applies a per-band percentile stretch (off by default, which writes raw DN).
 Single-pol pixels take the RED band's limits in all three bands, or the greyscale fallback
 would come out tinted. There is no published stretch to match: the reference map is scaled by

@@ -228,6 +228,16 @@ def main():
                          'not documented, so there is nothing to reproduce -- this is for '
                          'dialling in an appearance. Note it makes the output a BROWSE image, '
                          'not DN data.')
+    ap.add_argument('--stretchLimits', type=float, nargs=6, default=None,
+                    metavar=('R0', 'R1', 'G0', 'G1', 'B0', 'B1'),
+                    help='explicit per-band stretch limits for --mode rgb. Use this when '
+                         'building TILES: --stretch computes limits from whatever raster it '
+                         'is given, so per-tile stretching gives every tile its own and the '
+                         'mosaic comes out patchwork. Run --stretch once on the assembled '
+                         'mosaic (or a decimated copy), take the six numbers it prints, and '
+                         'pass them here for every tile. Per-band scaling is also what makes '
+                         'the colours work: raw DN is purple everywhere, because B is '
+                         'confined to [127, 255] while G sits low.')
     ap.add_argument('--base', default=None, metavar='MOSAIC',
                     help='FULL-cover like-pol mosaic, for --mode rgb: supplies the greyscale '
                          'where the ratio cover has nothing, i.e. ground acquired single-pol '
@@ -274,7 +284,13 @@ def main():
         ob.SetDescription(names[i])
 
     lims = None
-    if args.stretch is not None:
+    if args.stretchLimits is not None:
+        if args.mode != 'rgb':
+            sys.exit('ratioMosaic: --stretchLimits applies to --mode rgb only')
+        s = args.stretchLimits
+        lims = [(s[0], s[1]), (s[2], s[3]), (s[4], s[5])]
+        print('  stretch (given): ' + ', '.join(f'{a:.0f}-{b:.0f}' for a, b in lims), flush=True)
+    elif args.stretch is not None:
         if args.mode != 'rgb':
             sys.exit('ratioMosaic: --stretch applies to --mode rgb only')
         lims = samplePercentiles(bL, bC, ndL, ndC, args.mode, args.minDb, args.maxDb,
