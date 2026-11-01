@@ -95,6 +95,18 @@ def tileZoom(zoom, tileSize=256):
     return f'{max(lo - k, 0)}-{hi - k}'
 
 
+def runTiles(byte, out, zoom, resampling, processes, title, tileSize, oceanAltitude):
+    ''' gdal2tiles over a prepared byte VRT; shared by the dB and the RGB paths. '''
+    cmd = ['gdal2tiles.py', '--profile=geodetic', '-k', '-z', tileZoom(zoom, tileSize), '-r', resampling,
+           f'--processes={processes}', '-w', 'none', '-e', '--tiledriver=PNG', f'--tilesize={tileSize}'] + \
+        (['-t', title] if title else []) + [byte, out]
+    print(' '.join(cmd), flush=True)
+    rc = subprocess.run(cmd).returncode
+    if rc == 0 and title:
+        setTitle(f'{out}/doc.kml', title)        # also when gdal2tiles resumed an older product
+    return rc
+
+
 def superoverlay(inputs, res, out, zoom, dbMin=-24., dbMax=-1., resampling='average', processes=16,
                  title=None, nodata=NODATA, scale=100., tileSize=256, oceanAltitude=None):
     ''' nodata / scale: int16 dB x 100 with -3000 by default; Float32 linear layers (e.g. CV) pass
@@ -120,27 +132,30 @@ def superoverlay(inputs, res, out, zoom, dbMin=-24., dbMax=-1., resampling='aver
     mosaic = f'{stage}/mosaic.vrt'
     gdal.BuildVRT(mosaic, srcs, resolution='user', xRes=res, yRes=res, srcNodata=nodata,
                   VRTNodata=nodata)
-    # 2. 8-bit stretch; the source nodata becomes a mask band (transparent in the PNGs)
+    # 2. 8-bit stretch; the source nodata becomes a mask band (transparent in the PNGs).
+    #
+    # A 3-band source is the dual-pol RGB composite, whose bands are ALREADY Byte 1..255 with 0
+    # as no data (ratioMosaic applied the per-band stretch when the tiles were built, so that
+    # every tile shares one). Stretching it again here would be wrong twice over: the dB
+    # scaleParams do not apply to DN, and a per-band stretch computed on this mosaic would
+    # differ from the one its tiles were built with. So the composite only needs its mask band.
     byte = f'{stage}/mosaic.byte.vrt'
-    gdal.Translate(byte, mosaic, format='VRT', outputType=gdal.GDT_Byte, noData=0,
-                   scaleParams=[[dbMin * scale, dbMax * scale, 1, 255]], maskBand='auto')
-    # VRT scaling does not clamp to 1..255: data darker than dbMin would land on 0 = nodata
-    # (transparent). A LUT clamps at its end points; source nodata is applied before it.
-    with open(byte) as fp:
-        xml = fp.read()
-    xml = re.sub(r'\s*<ScaleOffset>.*?</ScaleOffset>\s*<ScaleRatio>.*?</ScaleRatio>',
-                 f'\n      <LUT>{dbMin * scale:g}:1,{dbMax * scale:g}:255</LUT>', xml)
-    xml = re.sub(r'\s*<Scale>.*?</Scale>', '', xml)
-    with open(byte, 'w') as fp:
-        fp.write(xml)
+    if gdal.Open(mosaic).RasterCount == 3:
+        gdal.Translate(byte, mosaic, format='VRT', maskBand='auto')
+    else:
+        gdal.Translate(byte, mosaic, format='VRT', outputType=gdal.GDT_Byte, noData=0,
+                       scaleParams=[[dbMin * scale, dbMax * scale, 1, 255]], maskBand='auto')
+        # VRT scaling does not clamp to 1..255: data darker than dbMin would land on 0 = nodata
+        # (transparent). A LUT clamps at its end points; source nodata is applied before it.
+        with open(byte) as fp:
+            xml = fp.read()
+        xml = re.sub(r'\s*<ScaleOffset>.*?</ScaleOffset>\s*<ScaleRatio>.*?</ScaleRatio>',
+                     f'\n      <LUT>{dbMin * scale:g}:1,{dbMax * scale:g}:255</LUT>', xml)
+        xml = re.sub(r'\s*<Scale>.*?</Scale>', '', xml)
+        with open(byte, 'w') as fp:
+            fp.write(xml)
     # 3. KML superoverlay of PNG tiles
-    cmd = ['gdal2tiles.py', '--profile=geodetic', '-k', '-z', tileZoom(zoom, tileSize), '-r', resampling,
-           f'--processes={processes}', '-w', 'none', '-e', '--tiledriver=PNG', f'--tilesize={tileSize}'] + \
-        (['-t', title] if title else []) + [byte, out]
-    print(' '.join(cmd), flush=True)
-    rc = subprocess.run(cmd).returncode
-    if rc == 0 and title:
-        setTitle(f'{out}/doc.kml', title)        # also when gdal2tiles resumed an older product
+    rc = runTiles(byte, out, zoom, resampling, processes, title, tileSize, oceanAltitude)
     # oceanAltitude lifts the ocean overlays off the sea floor (oceanAltitude.py). Off by default:
     # pinned at 10 m absolute, Google Earth dropped the sea ice at the mid zooms (2026-10-13), while
     # draped it draws at every zoom. Pass a height to restore the lift.

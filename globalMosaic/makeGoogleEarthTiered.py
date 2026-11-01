@@ -8,6 +8,15 @@ Three KML superoverlays under <out> (default <work>/googleEarth), one doc.kml lo
 the deeper layers draw over the shallower ones where they have data:
 
   base/    zoom 0-9   everything (land, ocean, sea ice) from the mosaic, as makeGoogleEarth
+
+A 3-BAND product is the dual-pol RGB composite (ratioMosaic --mode rgb): Byte 1..255 with 0 as
+no data, and the three bands share one mask. It is carried through unchanged -- block average,
+smooth, mask, tile -- and makeGoogleEarth skips its dB stretch for it, because the per-band
+stretch was already applied when the tiles were built (one set of limits for all of them, which
+is the point: stretching here would differ from what the tiles contain). Use --product rgb with
+a runRatioTiles output, e.g.
+
+  makeGoogleEarthTiered /scratch/ianj/mosaics/ratio30_z11 --product rgb
   land/    zoom 5-10  land, lakes and ice shelves only (ocean and sea ice stop at 9): each tile
                       averaged 2 x 2 (2.4" -> 4.8", about the zoom-10 pixel) and then --smooth N x N,
                       no-data left out of every average
@@ -134,22 +143,34 @@ def iceClass(paths, epsg, X, Y):
 
 
 def blockAverage(a, valid, k):
-    ''' k x k block mean ignoring no-data; returns (mean, any-valid mask). '''
-    ny, nx = (a.shape[0] // k) * k, (a.shape[1] // k) * k
-    s = np.where(valid, a, 0.)[:ny, :nx].reshape(ny // k, k, nx // k, k).sum((1, 3))
+    ''' k x k block mean ignoring no-data; returns (mean, any-valid mask).
+    `a` is (ny, nx) or (bands, ny, nx); `valid` is always (ny, nx), since the RGB composite's
+    bands share one mask -- a pixel has all three or none. '''
+    ny, nx = (a.shape[-2] // k) * k, (a.shape[-1] // k) * k
     w = valid[:ny, :nx].reshape(ny // k, k, nx // k, k).sum((1, 3))
-    return np.where(w > 0, s / np.maximum(w, 1), 0.), w > 0
+    if a.ndim == 2:
+        s = np.where(valid, a, 0.)[:ny, :nx].reshape(ny // k, k, nx // k, k).sum((1, 3))
+        return np.where(w > 0, s / np.maximum(w, 1), 0.), w > 0
+    out = np.stack([np.where(w > 0,
+                             np.where(valid, b, 0.)[:ny, :nx]
+                             .reshape(ny // k, k, nx // k, k).sum((1, 3)) / np.maximum(w, 1), 0.)
+                    for b in a])
+    return out, w > 0
 
 
-def writeTif(path, a, gt, srs):
+def writeTif(path, a, gt, srs, nodata=NODATA):
+    ''' (ny, nx) int16 dB x 100, or (3, ny, nx) Byte for the RGB composite. '''
+    bands = 1 if a.ndim == 2 else a.shape[0]
+    gtype = gdal.GDT_Byte if a.dtype == np.uint8 else gdal.GDT_Int16
     drv = gdal.GetDriverByName('GTiff')
-    ds = drv.Create(path, a.shape[1], a.shape[0], 1, gdal.GDT_Int16,
+    ds = drv.Create(path, a.shape[-1], a.shape[-2], bands, gtype,
                     options=['TILED=YES', 'COMPRESS=DEFLATE', 'PREDICTOR=2', 'BIGTIFF=IF_SAFER'])
     ds.SetGeoTransform(gt)
     ds.SetProjection(srs)
-    b = ds.GetRasterBand(1)
-    b.SetNoDataValue(NODATA)
-    b.WriteArray(a)
+    for i in range(bands):
+        b = ds.GetRasterBand(i + 1)
+        b.SetNoDataValue(nodata)
+        b.WriteArray(a if a.ndim == 2 else a[i])
     ds = None
 
 
@@ -160,31 +181,43 @@ def tileSources(job):
     ds = gdal.Open(vrt)
     gt = ds.GetGeoTransform()
     srs = ds.GetProjection()
-    a = ds.GetRasterBand(1).ReadAsArray().astype('f4')
-    valid = a != NODATA
+    # A 3-band source is the dual-pol RGB composite: Byte 1..255 with 0 as no data, and the
+    # three bands share one mask (a pixel has all three or none). Everything below works on a
+    # leading band axis when there is one, and on a plain 2-D array when there is not.
+    rgb = ds.RasterCount == 3
+    nd = 0 if rgb else NODATA
+    a = ds.ReadAsArray().astype('f4')
+    valid = (a[0] if rgb else a) != nd
     notes = []
     # ---- level 10: 2 x 2 block mean, then an N x N no-data-aware box smooth, land only
     m, v = blockAverage(a, valid, 2)
     if smooth > 1:
-        s = uniform_filter(np.where(v, m, 0.), smooth, mode='constant')
         w = uniform_filter(v.astype('f4'), smooth, mode='constant')
-        m = np.where(w > 0, s / np.maximum(w, 1e-6), 0.)
+        if m.ndim == 2:
+            s = uniform_filter(np.where(v, m, 0.), smooth, mode='constant')
+            m = np.where(w > 0, s / np.maximum(w, 1e-6), 0.)
+        else:
+            m = np.stack([np.where(w > 0,
+                                   uniform_filter(np.where(v, b, 0.), smooth, mode='constant')
+                                   / np.maximum(w, 1e-6), 0.) for b in m])
     gt10 = (gt[0], gt[1] * 2, 0., gt[3], 0., gt[5] * 2)
     land = features.rasterize([(landG, 1)], out_shape=m.shape, transform=Affine.from_gdal(*gt10),
                               dtype='uint8').astype(bool) if not landG.is_empty else np.zeros(m.shape, bool)
     keep = v & land
     if keep.any() and 'land' in want:
-        writeTif(f'{out}/src10/{name}.tif', np.where(keep, np.round(m), NODATA).astype('i2'), gt10, srs)
+        arr = (np.where(keep, np.round(m), nd).astype('u1') if rgb
+               else np.where(keep, np.round(m), nd).astype('i2'))
+        writeTif(f'{out}/src10/{name}.tif', arr, gt10, srs, nodata=nd)
         notes.append('land10')
     # ---- level 11: full resolution inside the detail mask
-    det = features.rasterize([(detailG, 1)], out_shape=a.shape, transform=Affine.from_gdal(*gt),
-                             dtype='uint8').astype(bool) if not detailG.is_empty else np.zeros(a.shape, bool)
-    landFull = features.rasterize([(landG, 1)], out_shape=a.shape, transform=Affine.from_gdal(*gt),
-                                  dtype='uint8').astype(bool) if not landG.is_empty else np.zeros(a.shape, bool)
-    interior = np.zeros(a.shape, bool)
+    det = features.rasterize([(detailG, 1)], out_shape=valid.shape, transform=Affine.from_gdal(*gt),
+                             dtype='uint8').astype(bool) if not detailG.is_empty else np.zeros(valid.shape, bool)
+    landFull = features.rasterize([(landG, 1)], out_shape=valid.shape, transform=Affine.from_gdal(*gt),
+                                  dtype='uint8').astype(bool) if not landG.is_empty else np.zeros(valid.shape, bool)
+    interior = np.zeros(valid.shape, bool)
     if icePaths:
         # ice-sheet classes on this grid: interior leaves the detail set, margin joins it (on land)
-        ny, nx = a.shape
+        ny, nx = valid.shape
         step = 4                                   # sample the 1 km classes every 4 pixels
         jj = np.arange(0, nx, step) + 0.5
         ii = np.arange(0, ny, step) + 0.5
@@ -205,9 +238,11 @@ def tileSources(job):
         if mask.any():
             rows, cols = np.nonzero(mask.any(1))[0], np.nonzero(mask.any(0))[0]
             r0, r1, c0, c1 = rows[0], rows[-1] + 1, cols[0], cols[-1] + 1
-            arr = np.where(mask[r0:r1, c0:c1], a[r0:r1, c0:c1], NODATA).astype('i2')
+            sub2 = a[:, r0:r1, c0:c1] if rgb else a[r0:r1, c0:c1]
+            arr = (np.where(mask[r0:r1, c0:c1], sub2, nd).astype('u1') if rgb
+                   else np.where(mask[r0:r1, c0:c1], sub2, nd).astype('i2'))
             writeTif(f'{out}/{sub}/{name}.tif', arr,
-                     (gt[0] + c0 * gt[1], gt[1], 0., gt[3] + r0 * gt[5], 0., gt[5]), srs)
+                     (gt[0] + c0 * gt[1], gt[1], 0., gt[3] + r0 * gt[5], 0., gt[5]), srs, nodata=nd)
             notes.append(f'{layer} {mask.mean():.0%}')
     return name, notes
 
