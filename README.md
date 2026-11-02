@@ -141,6 +141,9 @@ are for: both restrict the cover to granules that *have* a cross-pol term, dropp
 `SV`, and the cover is deterministic given the same candidates, so the two runs agree. Use
 `--allowV` as well or `DV` granules never reach the cover.
 
+`Documents/dualPolComposite.md` is the hand-off description of the product: what the bands
+are, how to read the colours, what is excluded and why, and the stretch.
+
 **An existing like-pol mosaic cannot be reused for a ratio.** Built without `--ratioCover`,
 its cover includes single-pol granules; the cross-pol pass skips those and fills the pixels
 from a different acquisition, and the result looks fine exactly where it is wrong. Expect the
