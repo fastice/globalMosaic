@@ -201,8 +201,9 @@ def tileSources(job):
                                    uniform_filter(np.where(v, b, 0.), smooth, mode='constant')
                                    / np.maximum(w, 1e-6), 0.) for b in m])
     gt10 = (gt[0], gt[1] * 2, 0., gt[3], 0., gt[5] * 2)
-    land = features.rasterize([(landG, 1)], out_shape=m.shape, transform=Affine.from_gdal(*gt10),
-                              dtype='uint8').astype(bool) if not landG.is_empty else np.zeros(m.shape, bool)
+    # v, not m: m carries a band axis for the RGB composite, and a mask is always 2-D
+    land = features.rasterize([(landG, 1)], out_shape=v.shape, transform=Affine.from_gdal(*gt10),
+                              dtype='uint8').astype(bool) if not landG.is_empty else np.zeros(v.shape, bool)
     keep = v & land
     if keep.any() and 'land' in want:
         arr = (np.where(keep, np.round(m), nd).astype('u1') if rgb
