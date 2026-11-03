@@ -169,8 +169,24 @@ def datelinePieces(geom):
     banding seen in both the backscatter and the coherence products; the lat/lon tiler never
     had it because globalGCOVTiles selects on loadGranules' unwrapped `geom`, while this one
     projects `raw`.
+
+    A footprint can also arrive ALREADY WRAPPED -- vertices at +178 and -179, bounds inside
+    -180..180 but spanning more than 180 degrees. scanMasks writes valid footprints that way,
+    and --validFootprints swaps them in for the catalogue's, so the bounds test below let them
+    through unsplit and they spanned the map: the cycle-031 bands at 6-8S and 15-18S, from
+    tracks 036 and 108 near 180E. So unwrap first (negative longitudes + 360), keeping the
+    result only if that makes it narrow -- a footprint that is genuinely wide is left alone.
+    buffer(0) because some arrive invalid (a near-pole MultiPolygon touching both +-180), and
+    the split's intersection throws on those, which projectCandidates turns into a dropped
+    granule.
     """
     w, s, e, n = geom.bounds
+    if e - w > 180.:
+        uw = transform(lambda x, y: (np.where(np.asarray(x) < 0., np.asarray(x) + 360., x), y),
+                       geom).buffer(0)
+        if not uw.is_empty and uw.bounds[2] - uw.bounds[0] < 180.:
+            geom = uw
+            w, s, e, n = geom.bounds
     if w >= -180. and e <= 180.:
         return [geom]
     world = box(-180., -90., 180., 90.)
