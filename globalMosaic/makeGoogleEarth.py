@@ -115,6 +115,12 @@ def superoverlay(inputs, res, out, zoom, dbMin=-24., dbMax=-1., resampling='aver
     quarter as many files (much faster on network file systems such as EFS). '''
     ''' KML superoverlay of 8-bit PNG tiles of int16 dB x 100 rasters (any CRS) at <out>/doc.kml.
     Returns gdal2tiles' exit code. '''
+    # The dual-pol RGB composite is Byte with 0 as no data. The int16 default (-3000) cannot
+    # even occur in a Byte band, so BuildVRT matched nothing, the no data went into the PNGs
+    # opaque, and every ocean tile drew as a black square with Google Earth's ocean only
+    # showing between tiles.
+    if gdal.Open(inputs[0]).RasterCount == 3:
+        nodata = 0
     os.makedirs(out, exist_ok=True)
     stage = f'{out}/stage'
     os.makedirs(stage, exist_ok=True)
